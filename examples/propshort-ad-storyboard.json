@@ -1,0 +1,87 @@
+{
+  "title": "PropShort \u2014 Real Estate News, Filtered for You",
+  "idea": "30-second PropShort app promotion using three authentic news screens and branded motion graphics. Script refers to visible screenshots, not independent live verification.",
+  "hook": "Real estate moves fast. Stay informed with PropShort.",
+  "scenes": [
+    {
+      "duration": 3,
+      "shot_type": "bold hook",
+      "motion_prompt": "Brand introduction on solid black, strong PropShort typography with orange underline and phone screenshot slide-in.",
+      "narration": "Real estate news changes every day.",
+      "subtitle": "REAL ESTATE MOVES FAST.",
+      "image_prompt": "Screenshot of actual PropShort news feed",
+      "graphic": {
+        "headline": "REAL ESTATE MOVES FAST."
+      },
+      "imageUrl": null
+    },
+    {
+      "duration": 4,
+      "shot_type": "auction counter",
+      "motion_prompt": "PropShort news card in phone frame, orange animated counter counts from zero to 66.",
+      "narration": "Sixty-six luxury apartments in Sarojini Nagar are set for auction.",
+      "subtitle": "66 LUXURY APARTMENTS",
+      "image_prompt": "Use uploaded actual Sarojini Nagar auction article screenshot",
+      "graphic": {
+        "headline": "66 LUXURY APARTMENTS",
+        "subheading": "Sarojini Nagar e-auction news",
+        "counter": {
+          "from": 0,
+          "to": 66,
+          "suffix": " homes"
+        }
+      },
+      "imageUrl": null
+    },
+    {
+      "duration": 5,
+      "shot_type": "fraud alert news",
+      "motion_prompt": "PropShort app screenshot slides in from right, headline reveals in black and orange on white.",
+      "narration": "One reported land sale case involved eighteen lakh rupees.",
+      "subtitle": "\u20b918 LAKH LAND CASE",
+      "image_prompt": "Use uploaded PropShort report of alleged land sale fraud",
+      "graphic": {
+        "headline": "\u20b918 LAKH LAND CASE",
+        "subheading": "Know the risks behind the headlines"
+      },
+      "imageUrl": null
+    },
+    {
+      "duration": 6,
+      "shot_type": "policy report",
+      "motion_prompt": "Phone screenshot zooms gently out, crisp header on cream, orange underline.",
+      "narration": "Commercial property ownership rules in Chandigarh could change.",
+      "subtitle": "POLICY UPDATES MATTER",
+      "image_prompt": "Use uploaded PropShort Chandigarh freehold policy news screenshot",
+      "graphic": {
+        "headline": "POLICY UPDATES MATTER",
+        "subheading": "Chandigarh freehold developments"
+      },
+      "imageUrl": null
+    },
+    {
+      "duration": 6,
+      "shot_type": "news card swipe",
+      "motion_prompt": "Three genuine uploaded PropShort screenshots animate as a sequence of swiping phone cards.",
+      "narration": "Stay up to date on auctions, property risks, and important policy news.",
+      "subtitle": "NEWS THAT MATTERS TO YOU",
+      "image_prompt": "Screenshots of real PropShort app news feed",
+      "graphic": {
+        "headline": "ONE FEED. MORE PERSPECTIVES."
+      },
+      "imageUrl": null
+    },
+    {
+      "duration": 6,
+      "shot_type": "product hero CTA",
+      "motion_prompt": "Orange brand background, white kinetic type, phone screen and clear website call-to-action.",
+      "narration": "Discover PropShort. Real estate, filtered for you.",
+      "subtitle": "DISCOVER PROPSHORT",
+      "image_prompt": "Real PropShort UI and authentic branded logo if supplied",
+      "graphic": {
+        "headline": "Discover PropShort"
+      },
+      "imageUrl": null
+    }
+  ]
+}

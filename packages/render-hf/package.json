@@ -1,0 +1,1 @@
+{"name":"@reel/render-hf","private":true,"version":"1.0.0","type":"module","main":"src/index.js","dependencies":{"hyperframes":"0.9.75"}}

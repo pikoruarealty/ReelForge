@@ -1,0 +1,6 @@
+{
+  "name":"reel-studio-demo","private":true,"version":"1.0.0","type":"module",
+  "workspaces":["apps/*","packages/*"],
+  "scripts":{"dev":"concurrently -k -n API,WEB -c blue,green \"npm run dev -w @reel/api\" \"npm run dev -w @reel/web\"","build":"npm run build -w @reel/web","start":"npm run start -w @reel/api","test:creative":"node --test tests/creative-director.test.mjs","render":"npm run render -w @reel/render","check":"node --check apps/api/src/index.js && node --check apps/api/src/pipeline.js && node --check apps/api/src/providers.js && node --check apps/api/src/creative-director.js && node --check apps/api/src/quality.js"},
+  "devDependencies":{"concurrently":"^9.2.1"}
+}
