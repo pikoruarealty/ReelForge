@@ -47,7 +47,7 @@ export function pickHighlight(words, hint) {
 }
 
 // Greedy wrap estimate so a headline can be sized to fit its box without measuring in a browser.
-// Calibrated against real renders: Inter 900 averages ~.56em per mixed-case letter, ~.70em per capital, ~.27em per space.
+// Calibrated against real renders: Inter 900 averages ~.56-.61em per mixed-case letter (digits, # and : are wider), ~.70em per capital, ~.27em per space.
 function fit(words, {width, max, min, lines, factor, maxH = 0}) {
   for (let s = max; s >= min; s -= 4) {
     const cw = s * factor, sp = s * 0.27;
@@ -72,7 +72,7 @@ function headline(c, id, text, {top, left = SAFE.l, width = SAFE.w, max = 120, m
   // Copy that is already upper-case (Claude's subtitles often are) is as wide as CSS-uppercased copy.
   const lettersOnly = words.join('').replace(/[^A-Za-z]/g, '');
   const caps = upper || (lettersOnly.length > 2 && lettersOnly === lettersOnly.toUpperCase());
-  const {size, lines: ln} = fit(words.map((w) => (caps ? w.toUpperCase() : w)), {width, max, min, lines, factor: caps ? 0.66 : 0.56, maxH});
+  const {size, lines: ln} = fit(words.map((w) => (caps ? w.toUpperCase() : w)), {width, max, min, lines, factor: caps ? 0.68 : 0.61, maxH});
   // The first frame is the thumbnail: the scene-0 headline is on screen at 0 s and only settles.
   const firstFrame = c.index === 0 && (hero || id === 'h');
   const clip = c.entrance === 'maskWords' && !firstFrame;
@@ -178,7 +178,7 @@ function statement(c) {
   const ruleTop = 392 + t.h + 18;
   const r = rule(c, 'r', {top: ruleTop, width: 220, at: 0.45});
   const sub = subline(c, 's', subText(c.scene), {top: ruleTop + 44, color: P.muted, size: 40});
-  const panelTop = Math.max(ruleTop + (sub ? 150 : 70), 640);
+  const panelTop = Math.max(ruleTop + (sub ? 184 : 70), 640);
   // The picture is a bottom-bleeding panel: the platform UI covers that band anyway, so it is pure texture.
   const panel = frame(c, 'card', c.img, {top: panelTop, left: 0, w: 1080, h: 1920 - panelTop, radius: '60px 60px 0 0', tilt: 0, at: 0.2, pos: '50% 35%'});
   return join(b, k, t, r, sub, panel);
@@ -214,15 +214,19 @@ function device(c) {
 }
 
 // 4. STAT: one giant number counting up. Falls back to STATEMENT when the copy has no number.
-const NUM = /(₹|rs\.?\s?)?(\d[\d,]*(?:\.\d+)?)\s?(%|cr(?:ore)?s?|lakhs?|k\b|m\b|x\b|sq\.?\s?ft)?/i;
+const NUM = /(₹|rs\.?\s?)?(\d[\d,]*(?:\.\d+)?)\s?(%|cr(?:ore)?s?\b|lakhs?\b|k\b|m\b|x\b|sq\.?\s?ft\b)?/gi;
+// A statistic needs a unit (%, ₹, Cr, Lakh, x, sq ft...): "Check #1" or "3 steps" must not become a giant counter.
 export function numberFrom(scene) {
   const g = scene?.graphic?.counter;
   if (g && Number.isFinite(Number(g.to)) && Number(g.to) > 0) return {to: Number(g.to), prefix: clean(g.prefix, 8), suffix: clean(g.suffix, 24)};
-  const m = NUM.exec(`${scene?.graphic?.headline || ''} ${scene?.subtitle || ''} ${scene?.narration || ''}`);
-  if (!m) return null;
-  const to = Number(m[2].replace(/,/g, ''));
-  if (!Number.isFinite(to) || to <= 0 || to > 1e8 || (to >= 1900 && to <= 2100 && !m[3])) return null;
-  return {to, prefix: m[1] ? '₹' : '', suffix: m[3] ? (/^cr/i.test(m[3]) ? ' Cr' : /^lakh/i.test(m[3]) ? ' Lakh' : m[3].replace(/\s/g, '')) : ''};
+  const text = `${scene?.graphic?.headline || ''} ${scene?.subtitle || ''} ${scene?.narration || ''}`;
+  for (const m of text.matchAll(NUM)) {
+    if (text[m.index - 1] === '#' || (!m[1] && !m[3])) continue;
+    const to = Number(m[2].replace(/,/g, ''));
+    if (!Number.isFinite(to) || to <= 0 || to > 1e8) continue;
+    return {to, prefix: m[1] ? '₹' : '', suffix: m[3] ? (/^cr/i.test(m[3]) ? ' Cr' : /^lakh/i.test(m[3]) ? ' Lakh' : m[3].replace(/\s/g, '')) : ''};
+  }
+  return null;
 }
 function stat(c) {
   const n = numberFrom(c.scene);

@@ -60,6 +60,9 @@ test('stat layout finds a real number and skips years', () => {
   assert.deepEqual(numberFrom({narration: 'Prices rose 12% in a quarter'}), {to: 12, prefix: '', suffix: '%'});
   assert.equal(numberFrom({narration: 'The market in 2026 looks calm'}), null);
   assert.equal(numberFrom({narration: 'A calm market'}), null);
+  assert.equal(numberFrom({graphic: {headline: 'Check #1: Registry Status'}}), null);
+  assert.equal(numberFrom({subtitle: 'Three steps, 3 checks'}), null);
+  assert.deepEqual(numberFrom({graphic: {headline: 'Cost: 6 Months + ₹5 Lakhs'}}), {to: 5, prefix: '₹', suffix: ' Lakh'});
   assert.equal(numberFrom({graphic: {counter: {to: 450, prefix: '₹', suffix: ' Cr'}}}).to, 450);
 });
 
