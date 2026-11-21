@@ -5,6 +5,8 @@ const requireKey=(key)=>{if(!process.env[key])throw new Error(`${key} is missing
 const bounded=(s,n=1000)=>String(s||'').slice(0,n);
 // OpenRouter uses OpenAI-compatible chat completions, not Anthropic Messages headers.
 // Auto-select OpenRouter when OPENROUTER_API_KEY exists; use ANTHROPIC_API_KEY otherwise.
+// A stalled provider connection must fail the job instead of leaving it "working" forever.
+const llmSignal=()=>AbortSignal.timeout(Number(process.env.LLM_TIMEOUT_MS||180000));
 const anthropicText=async(model,system,user,maxTokens=1800)=>{
  const useOpenRouter=Boolean(process.env.OPENROUTER_API_KEY);
  if(useOpenRouter){
@@ -15,7 +17,7 @@ const anthropicText=async(model,system,user,maxTokens=1800)=>{
   const res=await fetch('https://openrouter.ai/api/v1/chat/completions',{
    method:'POST',
    headers:{'content-type':'application/json','Authorization':`Bearer ${process.env.OPENROUTER_API_KEY}`,'X-OpenRouter-Title':'ReelForge AI Studio'},
-   body:JSON.stringify({model:id,max_tokens:maxTokens,messages:[{role:'system',content:system},{role:'user',content:user}]})
+   body:JSON.stringify({model:id,max_tokens:maxTokens,messages:[{role:'system',content:system},{role:'user',content:user}]}),signal:llmSignal()
   });
   const data=await res.json().catch(()=>({}));
   if(!res.ok)throw new Error(`OpenRouter ${res.status}: ${JSON.stringify(data).slice(0,400)}`);
@@ -25,7 +27,7 @@ const anthropicText=async(model,system,user,maxTokens=1800)=>{
   throw new Error('OpenRouter response did not contain text');
  }
  const key=requireKey('ANTHROPIC_API_KEY');
- const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01'},body:JSON.stringify({model,max_tokens:maxTokens,system,messages:[{role:'user',content:user}]})});
+ const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01'},body:JSON.stringify({model,max_tokens:maxTokens,system,messages:[{role:'user',content:user}]}),signal:llmSignal()});
  const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(`Claude ${res.status}: ${JSON.stringify(data).slice(0,320)}`);
  return (data.content||[]).filter(x=>x.type==='text').map(x=>x.text).join('\n');
 };
@@ -163,9 +165,23 @@ export async function makeImage(scene, i, outputPath, real) {
 
 export async function makeAudio(text,outputPath,real){if(!real)return {provider:'espeak/local fallback',generated:false};
  const errors=[];
- if(process.env.ELEVENLABS_API_KEY&&process.env.ELEVENLABS_VOICE_ID){try{
- const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(process.env.ELEVENLABS_VOICE_ID)}`,{method:'POST',headers:{'xi-api-key':process.env.ELEVENLABS_API_KEY,'content-type':'application/json'},body:JSON.stringify({text,model_id:model('ELEVENLABS_MODEL','eleven_flash_v2_5'),output_format:'mp3_44100_128'})});if(!res.ok)throw new Error(`ElevenLabs ${res.status}: ${(await res.text()).slice(0,240)}`);await fs.writeFile(outputPath,Buffer.from(await res.arrayBuffer()));return {provider:'elevenlabs',generated:true};
- }catch(e){errors.push(e.message)}}
+ if(process.env.ELEVENLABS_API_KEY&&process.env.ELEVENLABS_VOICE_ID){
+ const speak=async(voice)=>{
+  const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}`,{method:'POST',headers:{'xi-api-key':process.env.ELEVENLABS_API_KEY,'content-type':'application/json'},body:JSON.stringify({text,model_id:model('ELEVENLABS_MODEL','eleven_flash_v2_5'),output_format:'mp3_44100_128'}),signal:AbortSignal.timeout(Number(process.env.LLM_TIMEOUT_MS||180000))});
+  if(!res.ok)throw new Error(`ElevenLabs ${res.status}: ${(await res.text()).slice(0,240)}`);
+  await fs.writeFile(outputPath,Buffer.from(await res.arrayBuffer()));
+ };
+ try{await speak(process.env.ELEVENLABS_VOICE_ID);return {provider:'elevenlabs',generated:true};}
+ catch(e){
+  errors.push(e.message);
+  // Free plans cannot use library/professional voices through the API (HTTP 402). Premade voices work on every plan, so retry
+  // once with one instead of failing the whole job. The configured voice is left alone and works again after an upgrade.
+  const fallback=process.env.ELEVENLABS_FALLBACK_VOICE_ID||'cjVigY5qzO86Huf0OWal'; // premade "Eric - Smooth, Trustworthy"
+  if(/402|paid_plan_required/.test(e.message)&&fallback!==process.env.ELEVENLABS_VOICE_ID){
+   try{await speak(fallback);return {provider:'elevenlabs',generated:true,warning:`Voice ${process.env.ELEVENLABS_VOICE_ID} needs a paid ElevenLabs plan, so the premade fallback voice ${fallback} was used.`};}
+   catch(e2){errors.push(e2.message)}
+  }
+ }}
  // Kokoro self-hosted through a compatible /v1/audio/speech HTTP endpoint, e.g. Kokoro-FastAPI.
  try{const base=(process.env.KOKORO_API_BASE||'http://localhost:8880/v1').replace(/\/$/,'');const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),120000);try{
  const res=await fetch(`${base}/audio/speech`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'kokoro',input:text,voice:process.env.KOKORO_VOICE||'af_heart',response_format:'mp3'}),signal:controller.signal});if(!res.ok)throw new Error(`Kokoro ${res.status}: ${(await res.text()).slice(0,200)}`);await fs.writeFile(outputPath,Buffer.from(await res.arrayBuffer()));return {provider:'kokoro',generated:true};

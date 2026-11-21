@@ -28,7 +28,11 @@ async function prepareImages(job,plan,changed,real){for(let i=0;i<plan.scenes.le
   if(!/^[0-9a-f-]{36}$/i.test(assetId))throw new Error('Invalid uploaded asset ID');
   const original=path.join(store,'uploads',`${assetId}.png`);
   if(!(await exists(original)))throw new Error(`Uploaded asset ${assetId} is missing; re-upload it`);
-  await sharp(original).resize(1080,1920,{fit:'cover',position:'attention'}).png().toFile(target);
+  // contain (default): keep the screenshot whole, the renderer frames it. cover: legacy fill-the-frame crop for photos.
+  const cover=job.uploadFit==='cover';
+  if(cover)await sharp(original).resize(1080,1920,{fit:'cover',position:'attention'}).png().toFile(target);
+  else await sharp(original).resize({width:1600,height:1600,fit:'inside',withoutEnlargement:true}).png().toFile(target);
+  plan.scenes[i].image_fit=cover?'cover':'contain';
   plan.scenes[i].visual_source='uploaded';plan.scenes[i].uploaded_asset_id=assetId;plan.scenes[i].image_real=true;
  }else if(changed===null||changed.includes(i)||!(await exists(target))){
   const paid=real && (process.env.RENDER_STYLE==='cinematic' || (process.env.GRAPHICS_IMAGE_SCENES||'2,4').split(',').map(Number).includes(i));
@@ -61,7 +65,7 @@ async function prepareMotion(job,plan,real){
     await save(job);
   }
 }
-async function prepareAudio(job,plan,real){const text=plan.scenes.map(s=>s.narration).join(' ');const mp3=path.join(job.dir,'narration.mp3');const wav=path.join(job.dir,'narration.wav');if(real){try{const result=await makeAudio(text,mp3,true);job.audioProvider=result.provider;return mp3}catch(e){throw new Error(`Narration failed: ${e.message}. For a free narration test, set DEMO_MODE=true.`)}}await synthesizeFallback(text,wav);await run('ffmpeg',['-loglevel','error','-y','-i',wav,'-codec:a','libmp3lame','-q:a','4',mp3]);return mp3;}
+async function prepareAudio(job,plan,real){const text=plan.scenes.map(s=>s.narration).join(' ');const mp3=path.join(job.dir,'narration.mp3');const wav=path.join(job.dir,'narration.wav');if(real){try{const result=await makeAudio(text,mp3,true);job.audioProvider=result.provider;job.audioWarning=result.warning||null;return mp3}catch(e){throw new Error(`Narration failed: ${e.message}. For a free narration test, set DEMO_MODE=true.`)}}await synthesizeFallback(text,wav);await run('ffmpeg',['-loglevel','error','-y','-i',wav,'-codec:a','libmp3lame','-q:a','4',mp3]);return mp3;}
 async function renderRemotion(job,plan){const captionsPath=path.join(job.dir,'word-captions.json');const captions=await fs.readFile(captionsPath,'utf8').then(JSON.parse).catch(()=>[]);const props={title:plan.title,scenes:plan.scenes,audioUrl:webUrl(job.id,'narration.mp3'),wordCaptions:captions,renderStyle:process.env.RENDER_STYLE||'motion_graphics',renderTheme:job.renderTheme||process.env.RENDER_THEME||'default',creativePreset:job.creativePreset||'showcase',creativeIntensity:job.creativeIntensity??70,creativeTransition:job.creativeTransition||'slide',creativePlan:job.creativePlan||null};const propsFile=path.join(job.dir,'props.json');await fs.writeFile(propsFile,JSON.stringify(props));const entry=path.join(root,'packages/render/src/index.jsx');await run(path.join(root,'node_modules/.bin/remotion'),['render',entry,'ReelVideo',path.join(job.dir,'reel.mp4'),`--props=${propsFile}`,'--codec=h264','--concurrency=2','--log=error'],{env:{...process.env,REMOTION_CHROME_EXECUTABLE:process.env.REMOTION_CHROME_EXECUTABLE||'/usr/bin/chromium'}});}
 // HyperFrames (HTML + GSAP) renderer. Builds a self-contained project from cached assets, lints it, renders to MP4.
 // RENDERER=hyperframes (default) | remotion. No AI provider is called here.
@@ -93,7 +97,7 @@ async function tryAlignSubtitles(job){
  catch(e){job.subtitleWarning=`Whisper unavailable; scene-timed captions retained: ${e.message}`;job.subtitleMode='scene-timed'}
 }
 export async function save(job){job.updatedAt=new Date().toISOString();await fs.writeFile(path.join(job.dir,'job.json'),JSON.stringify({...job,dir:undefined},null,2));}
-export async function createJob(topic,imageSource="generated",assetIds=[],creativeOptions={}){await fs.mkdir(store,{recursive:true});const id=`reel-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;const dir=path.join(store,id);await fs.mkdir(dir);const job={id,dir,topic,imageSource,assetIds,status:'queued',phase:'Queued',progress:0,createdAt:new Date().toISOString(),versions:[],error:null,videoUrl:null,renderVersions:[],dirty:{images:[],audio:false},cacheMode:'reuse',renderTheme:process.env.RENDER_THEME||'default',creativePreset:'showcase',creativeIntensity:70,creativeTransition:'slide',creativeMode:creativeOptions.creativeMode||'auto',visualVariety:creativeOptions.visualVariety??85,creativitySeed:creativeOptions.creativitySeed??randomSeed(),creativePlan:null,creativeHistory:[]};await save(job);return job;}
+export async function createJob(topic,imageSource="generated",assetIds=[],creativeOptions={}){await fs.mkdir(store,{recursive:true});const id=`reel-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;const dir=path.join(store,id);await fs.mkdir(dir);const job={id,dir,topic,imageSource,assetIds,status:'queued',phase:'Queued',progress:0,createdAt:new Date().toISOString(),versions:[],error:null,videoUrl:null,renderVersions:[],dirty:{images:[],audio:false},cacheMode:'reuse',renderTheme:process.env.RENDER_THEME||'default',creativePreset:'showcase',creativeIntensity:70,creativeTransition:'slide',creativeMode:creativeOptions.creativeMode||'auto',visualVariety:creativeOptions.visualVariety??85,uploadFit:creativeOptions.uploadFit||'contain',creativitySeed:creativeOptions.creativitySeed??randomSeed(),creativePlan:null,creativeHistory:[]};await save(job);return job;}
 export async function executeJob(job){const real=process.env.DEMO_MODE==='false';const update=async(phase,progress,extra={})=>{Object.assign(job,{status:'working',phase,progress,...extra});await save(job)};try{
  await update('Generating idea, script and storyboard',12);let plan=await createPlan(job.topic,real);await update('Evaluating initial storyboard',24);let evaluation=await evaluate(plan,real,0);job.versions.push({number:1,score:evaluation.score,feedback:evaluation.feedback});let revision=0;const limit=Math.max(0,Math.min(3,Number(process.env.MAX_REVISIONS??3)));const threshold=Number(process.env.QUALITY_THRESHOLD||85);let changed=null;
  while(evaluation.score<threshold&&revision<limit){revision++;await update(`Optimizing weak scenes (revision ${revision}/${limit})`,24+revision*6);const candidate=await improve(plan,evaluation,real);if(!candidate.changed.length)break;plan=candidate.plan;changed=candidate.changed;evaluation=await evaluate(plan,real,revision);job.versions.push({number:revision+1,score:evaluation.score,feedback:evaluation.feedback,changed});}
@@ -213,4 +217,17 @@ export async function rerenderJob(job){
 }
 
 export async function loadJob(id){if(!/^reel-[a-zA-Z0-9-]+$/.test(id))return null;const file=path.join(store,id,'job.json');try{return JSON.parse(await fs.readFile(file,'utf8'))}catch{return null}}
+// A job only runs inside the process that started it. If the API restarts (node --watch does this on every file
+// change) the job is gone but its job.json still says "working", which blocks every new job with a 409. On startup
+// nothing can be running yet, so any job still marked working/queued is orphaned: mark it failed so it can be re-run.
+export async function recoverInterruptedJobs(){
+ let n=0;
+ for(const j of await listJobs()){
+  if(!['working','queued'].includes(j.status))continue;
+  const job={...j,dir:path.join(store,j.id)};
+  Object.assign(job,{status:'failed',phase:'Interrupted',error:'The API restarted while this job was running (for example a dev-server reload). Start it again; cached images are kept.'});
+  await save(job);n++;
+ }
+ return n;
+}
 export async function listJobs(){await fs.mkdir(store,{recursive:true});const names=(await fs.readdir(store)).filter(x=>x.startsWith('reel-'));const jobs=await Promise.all(names.map(loadJob));return jobs.filter(Boolean).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,50)}

@@ -78,7 +78,7 @@ export function planTimeline({scenes, audio = null, whisper = null, lead = 0.18,
     const end = i === starts.length - 1 ? total : starts[i + 1];
     return {start: Number(s.toFixed(3)), end: Number(end.toFixed(3)), duration: Number((end - s).toFixed(3))};
   });
-  return {total, scenes: out, words: perScene.flat(), source, speech: {start: speechStart, end: speechEnd}};
+  return {total, scenes: out, words: perScene.flat(), wordsByScene: perScene, source, speech: {start: speechStart, end: speechEnd}};
 }
 
 // Karaoke caption groups: short bursts that break on punctuation, never wider than ~3 words.

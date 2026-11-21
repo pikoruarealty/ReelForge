@@ -21,6 +21,7 @@ import {planTimeline} from './timing.js';
 import {analyzeNarration} from './audio.js';
 import {captionsComposition} from './captions.js';
 import {chromeComposition} from './chrome.js';
+import {sceneBeats, impactMoments} from './beats.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -32,17 +33,33 @@ const LEGACY_TRANSITIONS = ['wipe', 'zoom', 'pop', 'slide'];
 const ALTERNATES = ['news_stack', 'phone_focus', 'headline_ticker', 'bold_statement'];
 
 // Pick every scene's layout, then break up neighbours that would render as the same design family.
-function pickLayouts(scenes, creativePlan) {
+// Scenes whose picture is an uploaded screenshot are routed to PROOF, which shows the screenshot whole (never cropped or
+// full-bleed). The opening hook and number scenes stay text-only for rhythm; the sign-off is always the end card.
+const SCREENSHOT_FAMILIES = new Set(['device', 'statement', 'cards', 'ticker', 'hook']);
+function pickLayouts(scenes, creativePlan, images) {
   const layouts = scenes.map((s, i) => s?.graphic?.layout || creativePlan?.layouts?.[i] || LEGACY_LAYOUTS[Math.min(i, LEGACY_LAYOUTS.length - 1)]);
   for (let i = 1; i < layouts.length - 1; i++) {
+    if (images[i]?.kind === 'screenshot') continue;
     const fam = (j) => familyName(layouts[j], scenes[j]);
     if (fam(i) !== fam(i - 1)) continue;
     const alt = ALTERNATES.find((a) => { const f = familyName(a, scenes[i]); return f !== fam(i - 1) && f !== familyName(layouts[i + 1], scenes[i + 1]); });
     if (alt && !scenes[i]?.graphic?.layout) layouts[i] = alt; // an explicit per-scene override always wins
   }
-  return layouts;
+  return layouts.map((l, i) => {
+    if (images[i]?.kind !== 'screenshot' || i === layouts.length - 1) return l;
+    const fam = familyName(l, scenes[i]);
+    return SCREENSHOT_FAMILIES.has(fam) && !(fam === 'hook' && i === 0) ? 'screenshot_proof' : l;
+  });
 }
 const exists = (p) => fs.stat(p).then(() => true, () => false);
+async function pngSize(file) {
+  const fh = await fs.open(file, 'r');
+  try {
+    const b = Buffer.alloc(24);
+    await fh.read(b, 0, 24, 0);
+    return b.toString('ascii', 1, 4) === 'PNG' ? {w: b.readUInt32BE(16), h: b.readUInt32BE(20)} : {w: 0, h: 0};
+  } finally { await fh.close(); }
+}
 
 // Empty a project folder for a fresh build. On Windows the folder itself can be locked (a lingering
 // browser or CLI process keeps it as its cwd), so on failure clear its contents instead of removing it.
@@ -59,20 +76,24 @@ async function resetDir(dir) {
   }
 }
 
-// Which scenes carry a real picture (uploaded photo or paid AI image) versus local placeholder art?
-// Placeholder scenes borrow the nearest real picture (re-cropped by a different camera move), so the
-// two paid images in a six-scene reel are used across the whole film instead of leaving gradient scenes.
+// Which scenes carry a real picture (uploaded image or paid AI image) versus local placeholder art?
+// Uploaded images that are screenshots (image_fit !== 'cover') keep their own aspect and are shown whole (kind 'screenshot').
+// Placeholder scenes borrow the nearest real AI picture (a different crop each time), so the two paid images in a six-scene
+// reel cover the whole film instead of leaving gradient scenes. Screenshots are never reused as backgrounds.
 function resolveImages(scenes) {
+  const shot = (s) => Boolean(s.__asset) && s.visual_source === 'uploaded' && s.image_fit !== 'cover';
   const real = scenes.map((s) => Boolean(s.__asset) && (s.visual_source === 'uploaded' || s.image_real !== false));
-  const realIdx = real.map((r, i) => (r ? i : -1)).filter((i) => i >= 0);
+  const realIdx = real.map((r, i) => (r && !shot(scenes[i]) ? i : -1)).filter((i) => i >= 0);
   const out = [];
   scenes.forEach((s, i) => {
-    if (real[i]) { out.push({src: s.__asset, real: true, reused: false, from: i}); return; }
-    if (!realIdx.length) { out.push({src: s.__asset || null, real: false, reused: false, from: i}); return; }
+    const dims = {w: s.__w || 0, h: s.__h || 0};
+    if (shot(s)) { out.push({src: s.__asset, real: true, reused: false, from: i, kind: 'screenshot', ...dims}); return; }
+    if (real[i]) { out.push({src: s.__asset, real: true, reused: false, from: i, kind: 'photo', ...dims}); return; }
+    if (!realIdx.length) { out.push({src: s.__asset || null, real: false, reused: false, from: i, kind: 'placeholder', ...dims}); return; }
     // Prefer a different picture than the scene before; among equals, the nearest one.
     const prev = out[i - 1]?.from;
     const ranked = [...realIdx].sort((a, b) => (Number(a === prev) - Number(b === prev)) || (Math.abs(a - i) - Math.abs(b - i)));
-    out.push({src: scenes[ranked[0]].__asset, real: true, reused: true, from: ranked[0]});
+    out.push({src: scenes[ranked[0]].__asset, real: true, reused: true, from: ranked[0], kind: 'photo', w: scenes[ranked[0]].__w || 0, h: scenes[ranked[0]].__h || 0});
   });
   return out;
 }
@@ -89,6 +110,9 @@ export async function buildProject({jobDir, projectDir, plan, creativePlan, crea
     if (await exists(src)) {
       await fs.copyFile(src, path.join(projectDir, 'assets', `scene-${i}.png`));
       scenes[i].__asset = `assets/scene-${i}.png`;
+      const sz = await pngSize(src);
+      scenes[i].__w = sz.w;
+      scenes[i].__h = sz.h;
     }
   }
   await fs.copyFile(require.resolve('gsap/dist/gsap.min.js'), path.join(projectDir, 'lib', 'gsap.min.js'));
@@ -110,7 +134,9 @@ export async function buildProject({jobDir, projectDir, plan, creativePlan, crea
   const seed = Number(creativePlan?.seed ?? 20260101) >>> 0;
   const labels = scenes.map((s) => clean(s.subtitle || headlineText(s), 44));
   const hosts = [];
-  const layouts = pickLayouts(scenes, creativePlan);
+  const layouts = pickLayouts(scenes, creativePlan, images);
+  const captionMode = (process.env.CAPTION_MODE || 'impact').toLowerCase(); // impact (default) | karaoke | off
+  const karaoke = captionMode === 'karaoke';
 
   for (let i = 0; i < scenes.length; i++) {
     const slot = timing.scenes[i];
@@ -121,10 +147,15 @@ export async function buildProject({jobDir, projectDir, plan, creativePlan, crea
     const tr = scenes[i]?.graphic?.transition || creativePlan?.transitions?.[i] || LEGACY_TRANSITIONS[i % LEGACY_TRANSITIONS.length] || creativeTransition;
     const p = `s${i}`;
     const rng = mulberry32(seed * 7919 + i * 104729 + 17);
+    // Words of this scene in scene-local seconds. They drive the beats (clause breaks) and impact stamps (key words spoken).
+    const words = (timing.wordsByScene[i] || []).map((w) => ({text: w.text, start: Number((w.start - hostStart).toFixed(3)), end: Number((w.end - hostStart).toFixed(3))}));
     const ctx = {
       p, scene: scenes[i], scenes, index: i, n: scenes.length, D, ov, t0: Number((ov * 0.6).toFixed(3)),
+      words, beats: sceneBeats(words, D),
+      shots: images.filter((m) => m.kind === 'screenshot' && m.w && m.h).map((m) => ({src: m.src, w: m.w, h: m.h})),
+      impacts: layout === 'brand_endcard' ? [] : impactMoments(words, D, {hint: scenes[i]?.graphic?.highlight, max: D > 7 ? 3 : 2}),
       entrance: ENTRANCES[(seed + i) % ENTRANCES.length], rng, img: images[i],
-      pool: [...new Set(images.filter((m) => m.real).map((m) => m.src))].map((src) => ({src, real: true})),
+      pool: [...new Set(images.filter((m) => m.real && m.kind !== 'screenshot').map((m) => m.src))].map((src) => ({src, real: true})),
       labels: labels.slice(i + 1).concat(labels.slice(0, i + 1)),
     };
     const body = buildLayout(layout, ctx);
@@ -152,7 +183,7 @@ export async function buildProject({jobDir, projectDir, plan, creativePlan, crea
     hosts.push(`    <div id="${p}" data-composition-id="${p}" data-composition-src="compositions/${p}.html" data-start="${hostStart}" data-duration="${D}" data-track-index="${1 + (i % 2)}" data-track-kind="graphics" data-width="${W}" data-height="${H}" style="z-index:${10 + i};"></div>`);
   }
 
-  await fs.writeFile(path.join(projectDir, 'compositions', 'captions.html'), captionsComposition({words: timing.words, total}));
+  if (karaoke) await fs.writeFile(path.join(projectDir, 'compositions', 'captions.html'), captionsComposition({words: timing.words, total}));
   await fs.writeFile(path.join(projectDir, 'compositions', 'chrome.html'), chromeComposition({total}));
   const musicTag = hasMusic
     ? `      <audio id="music" class="clip" src="assets/music${path.extname(musicFile) || '.mp3'}" data-start="0" data-duration="${total}" data-track-index="5" data-volume="0.13" data-fade-out="1.2"></audio>\n` : '';
@@ -171,7 +202,7 @@ export async function buildProject({jobDir, projectDir, plan, creativePlan, crea
   <body>
     <div id="root" data-composition-id="main" data-start="0" data-duration="${total}" data-width="${W}" data-height="${H}">
 ${hosts.join('\n')}
-      <div id="captions" data-composition-id="captions" data-composition-src="compositions/captions.html" data-start="0" data-duration="${total}" data-track-index="3" data-track-kind="captions" data-width="${W}" data-height="${H}" style="z-index:60;"></div>
+${karaoke ? `      <div id="captions" data-composition-id="captions" data-composition-src="compositions/captions.html" data-start="0" data-duration="${total}" data-track-index="3" data-track-kind="captions" data-width="${W}" data-height="${H}" style="z-index:60;"></div>` : ''}
       <div id="chrome" data-composition-id="chrome" data-composition-src="compositions/chrome.html" data-start="0" data-duration="${total}" data-track-index="4" data-track-kind="graphics" data-width="${W}" data-height="${H}" style="z-index:70;"></div>
 ${hasAudio ? `      <audio id="narration" class="clip" src="assets/narration.mp3" data-start="0" data-track-index="2" data-volume="1"></audio>\n` : ''}${musicTag}    </div>
     <script>
@@ -185,7 +216,7 @@ ${hasAudio ? `      <audio id="narration" class="clip" src="assets/narration.mp3
   await fs.writeFile(path.join(projectDir, 'index.html'), index);
   await fs.writeFile(path.join(projectDir, 'hyperframes.json'), JSON.stringify({paths: {blocks: 'compositions', components: 'compositions/components', assets: 'assets'}}, null, 2));
   await fs.writeFile(path.join(projectDir, 'meta.json'), JSON.stringify({id: path.basename(projectDir), name: clean(title, 60), generatedBy: 'reelforge'}, null, 2));
-  return {projectDir, duration: total, scenes: scenes.length, timing: {source: timing.source, total, slots: timing.scenes}};
+  return {projectDir, duration: total, scenes: scenes.length, timing: {source: timing.source, total, slots: timing.scenes, captions: captionMode}};
 }
 
 // Run the CLI through `node` on its real entry file. The .bin shim is a shell script on Windows,

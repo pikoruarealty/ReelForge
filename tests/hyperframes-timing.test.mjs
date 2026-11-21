@@ -64,6 +64,8 @@ test('stat layout finds a real number and skips years', () => {
   assert.equal(numberFrom({subtitle: 'Three steps, 3 checks'}), null);
   assert.deepEqual(numberFrom({graphic: {headline: 'Cost: 6 Months + ₹5 Lakhs'}}), {to: 5, prefix: '₹', suffix: ' Lakh'});
   assert.equal(numberFrom({graphic: {counter: {to: 450, prefix: '₹', suffix: ' Cr'}}}).to, 450);
+  assert.equal(numberFrom({graphic: {counter: {to: 18, prefix: '₹', suffix: 'Lakh'}}}).suffix, ' Lakh');
+  assert.equal(numberFrom({graphic: {counter: {to: 23, suffix: '%'}}}).suffix, '%');
 });
 
 test('highlight prefers the hint, then numbers, then the longest meaningful word', () => {

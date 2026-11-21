@@ -53,3 +53,19 @@ and opens in HyperFrames Studio. `render-again` / `remix` / `regenerate` all reu
 - Quality still depends on the two paid images; upload property photos (`imageSource=uploaded`) for the best result.
 - Remotion path is untouched but untested on Windows (needs `REMOTION_CHROME_EXECUTABLE`).
 - Not done: music library, sound effects, registry blocks (`npx hyperframes add ...`), Blender-made 3D assets.
+
+## Update: speech-driven motion and screenshots (feedback round 1)
+Feedback from real runs: captions in the middle of the frame were distracting, pictures kept zooming for the whole line,
+screenshots were cropped full-bleed, and nothing happened *while* the voice spoke. Changes:
+
+- **Captions are off by default** (`CAPTION_MODE=impact`). Only a few *impact words* (numbers, the highlight word, key terms) are stamped
+  on screen at the instant they are spoken (`beats.js`). `CAPTION_MODE=karaoke` restores word-by-word subtitles; `off` hides all.
+- **No continuous zoom.** Pictures settle in once and hold still. A long photo scene gets one cut-in on a speech beat.
+- **Motion lands on the voice.** Per scene, `beats.js` finds clause breaks and impact words from the word timings. The headline's accent word
+  lights up when it is spoken; impact stamps pop when spoken; a screenshot camera steps on clause breaks.
+- **Screenshots are shown whole.** Uploads are no longer cropped (previously `fit: cover` at upload *and* again in the pipeline).
+  New per-job option `uploadFit`: `contain` (default, screenshots) or `cover` (photos, fills the frame). UI: toggle under "Upload my images".
+  Scenes with an uploaded screenshot render as **PROOF**: the screenshot in a device frame, width-fit, with a camera that scrolls down it on
+  clause breaks (a wide image is shown whole with one punch-in). Hook and number scenes stay text-only with the next screenshot rising
+  from the bottom edge. Old uploads were already cropped to 9:16 and are shown as they are.
+- **Visuals:** faint blueprint grid on brand backdrops, sticker-style stamps, device frame, ripple on clause breaks, scene rhythm alternates dark/cream.
