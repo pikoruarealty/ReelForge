@@ -1,151 +1,168 @@
 // HyperFrames renderer for ReelForge.
 //
-// buildProject() turns a job's cached assets (scene PNGs, narration, storyboard) plus its creative plan
-// into a HyperFrames project directory: index.html (root) + compositions/s<N>.html (one per scene).
+// buildProject() turns a job's cached assets (scene images, narration, storyboard) plus its creative plan
+// into a HyperFrames project directory:
+//   index.html                 root: scene hosts, captions host, narration, optional music, brand chip
+//   compositions/s<N>.html     one designed scene per sub-composition (GSAP timeline each)
+//   compositions/captions.html word-by-word karaoke captions for the whole video
+//   lib/gsap.min.js            local GSAP copy (offline, deterministic, no CDN at render time)
 // renderProject() renders that directory to MP4 with the local HyperFrames CLI.
-// Neither step calls any AI provider; rendering is deterministic and works from cached files.
+//
+// No AI provider is called. Timing is derived from the narration audio (see timing.js), so the cost of a
+// render is the same as before; only the picture gets better.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
+import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
-import {LAYOUT_BUILDERS, LAYOUT_NAMES, P, clean, esc} from './layouts.js';
+import {buildLayout, familyName, LAYOUT_NAMES, P, clean, esc, headlineText} from './layouts.js';
+import {ENTRANCES, mulberry32, transitionIn, edgeStyle, num} from './motion.js';
+import {planTimeline} from './timing.js';
+import {analyzeNarration} from './audio.js';
+import {captionsComposition} from './captions.js';
+import {chromeComposition} from './chrome.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 const W = 1080, H = 1920;
-const GSAP = 'https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js';
-// Same fallback ladder as the Remotion renderer uses for scenes that have no creative plan.
-const LEGACY_LAYOUTS = ['kinetic_hook', 'stat_highlight', 'editorial_card', 'split_headline', 'swipe_gallery', 'brand_endcard'];
-const PRESETS = {editorial: {travel: .72, zoom: .75}, energetic: {travel: 1.55, zoom: 1.65}, cinematic: {travel: 1.05, zoom: 1.45}, showcase: {travel: 1.15, zoom: 1.15}};
-const APPROVED_BG = [P.ink, P.cream, P.white, P.peach, P.orange];
+const OVERLAP = 0.4; // seconds the incoming scene plays its transition over the outgoing one
+// Fallback ladder for scenes with no creative plan: hook, fact, device, number, cards, sign-off.
+const LEGACY_LAYOUTS = ['kinetic_hook', 'bold_statement', 'phone_focus', 'stat_highlight', 'news_stack', 'brand_endcard'];
+const LEGACY_TRANSITIONS = ['wipe', 'zoom', 'pop', 'slide'];
+const ALTERNATES = ['news_stack', 'phone_focus', 'headline_ticker', 'bold_statement'];
 
-const bgFor = (layout, scene, i) => {
-  if (['kinetic_hook', 'word_wall', 'spotlight_reveal'].includes(layout)) return P.ink;
-  if (layout === 'brand_endcard') return P.orange;
-  if (['bold_statement', 'split_headline'].includes(layout)) return P.cream;
-  const bg = scene?.graphic?.background;
-  return APPROVED_BG.includes(bg) ? bg : [P.ink, P.cream, P.white, P.cream, P.peach, P.orange][i % 6];
-};
-
-function decoration(p, preset, dark, D) {
-  const col = dark ? '#FFFFFF' : P.orange;
-  if (preset === 'editorial') return {html: `<div id="${p}-d1" style="position:absolute;top:215px;right:75px;width:240px;height:10px;background:${col};opacity:.8;transform-origin:right center;"></div>`, js: `tl.fromTo("#${p}-d1",{scaleX:0},{scaleX:1,duration:.9,ease:"power3.out"},.1);`};
-  if (preset === 'energetic') return {html: `<div id="${p}-d1" style="position:absolute;top:240px;right:70px;width:300px;height:300px;border:10px solid ${col};border-radius:50%;opacity:.1;"></div>`, js: `tl.fromTo("#${p}-d1",{scale:.4},{scale:1.5,duration:${D},ease:"power1.out"},0);`};
-  if (preset === 'cinematic') return {html: `<div id="${p}-d1" style="position:absolute;top:350px;right:-190px;width:620px;height:620px;border:7px solid ${col};border-radius:50%;opacity:.12;"></div>`, js: `tl.fromTo("#${p}-d1",{scale:.6},{scale:1.3,duration:${D},ease:"none"},0);`};
-  return {html: `<div id="${p}-d1" style="position:absolute;top:202px;right:55px;width:240px;height:74px;border-radius:45px;border:4px solid ${col};opacity:.12;"></div>`, js: `tl.fromTo("#${p}-d1",{x:220},{x:0,duration:.9,ease:"power3.out"},.1);`};
-}
-
-// Stage entrance/exit mirrors Remotion's MotionStage: slide | zoom | wipe | pop, then a short fade-out.
-function stageTweens(p, transition, travel, D) {
-  const out = Math.max(0, D - 0.37);
-  const enter = {
-    slide: `tl.fromTo("#${p}-stage",{opacity:0,x:${(75 * travel).toFixed(1)},y:${(38 * travel).toFixed(1)}},{opacity:1,x:0,y:0,duration:.5,ease:"power3.out"},0);`,
-    zoom: `tl.fromTo("#${p}-stage",{opacity:0,scale:.84},{opacity:1,scale:1,duration:.5,ease:"power3.out"},0);`,
-    pop: `tl.fromTo("#${p}-stage",{opacity:0,scale:.92,y:${(38 * travel).toFixed(1)}},{opacity:1,scale:1,y:0,duration:.5,ease:"back.out(1.4)"},0);`,
-    wipe: `tl.fromTo("#${p}-stage",{opacity:1,clipPath:"inset(0% 100% 0% 0%)"},{opacity:1,clipPath:"inset(0% 0% 0% 0%)",duration:.55,ease:"power3.out"},0);`,
-  }[transition] || '';
-  return `${enter}tl.to("#${p}-stage",{opacity:0,duration:.37,ease:"power1.in"},${out.toFixed(3)});`;
-}
-
-function captions(p, scene, wordCaptions, startAt, D, dark) {
-  const style = `position:absolute;bottom:168px;left:60px;right:60px;display:flex;justify-content:center;opacity:0;`;
-  const pill = `padding:17px 27px;border-radius:17px;max-width:960px;background:${dark ? 'rgba(255,255,255,.93)' : 'rgba(24,24,24,.92)'};color:${dark ? P.ink : P.white};font-weight:800;font-size:37px;text-align:center;line-height:1.18;box-shadow:0 12px 24px rgba(0,0,0,.13);`;
-  const words = (wordCaptions || []).filter((w) => Number(w.end) > startAt && Number(w.start) < startAt + D && clean(w.text));
-  if (!words.length) {
-    const text = clean(scene.subtitle || scene.narration, 92);
-    if (!text) return {html: '', js: ''};
-    return {html: `<div id="${p}-cap" style="${style}"><div style="${pill}">${esc(text)}</div></div>`, js: `tl.to("#${p}-cap",{opacity:1,duration:.25},.25);`};
+// Pick every scene's layout, then break up neighbours that would render as the same design family.
+function pickLayouts(scenes, creativePlan) {
+  const layouts = scenes.map((s, i) => s?.graphic?.layout || creativePlan?.layouts?.[i] || LEGACY_LAYOUTS[Math.min(i, LEGACY_LAYOUTS.length - 1)]);
+  for (let i = 1; i < layouts.length - 1; i++) {
+    const fam = (j) => familyName(layouts[j], scenes[j]);
+    if (fam(i) !== fam(i - 1)) continue;
+    const alt = ALTERNATES.find((a) => { const f = familyName(a, scenes[i]); return f !== fam(i - 1) && f !== familyName(layouts[i + 1], scenes[i + 1]); });
+    if (alt && !scenes[i]?.graphic?.layout) layouts[i] = alt; // an explicit per-scene override always wins
   }
-  // Word-aligned captions: one element per word, switched on/off at its own timestamps.
-  let html = '', js = '';
-  words.forEach((w, k) => {
-    const a = Math.max(0, Number(w.start) - startAt), b = Math.min(D, Math.max(a + 0.08, Number(w.end) - startAt));
-    html += `<div id="${p}-cap${k}" style="${style}"><div style="${pill}">${esc(clean(w.text, 40))}</div></div>`;
-    js += `tl.set("#${p}-cap${k}",{opacity:1},${a.toFixed(3)});tl.set("#${p}-cap${k}",{opacity:0},${b.toFixed(3)});`;
-  });
-  return {html, js};
+  return layouts;
+}
+const exists = (p) => fs.stat(p).then(() => true, () => false);
+
+// Empty a project folder for a fresh build. On Windows the folder itself can be locked (a lingering
+// browser or CLI process keeps it as its cwd), so on failure clear its contents instead of removing it.
+async function resetDir(dir) {
+  try {
+    await fs.rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 150});
+    await fs.mkdir(dir, {recursive: true});
+  } catch {
+    await fs.mkdir(dir, {recursive: true});
+    for (const name of await fs.readdir(dir)) {
+      if (name === '.hyperframes') continue; // CLI caches and reports; safe to leave
+      await fs.rm(path.join(dir, name), {recursive: true, force: true, maxRetries: 5, retryDelay: 150});
+    }
+  }
 }
 
-export function sceneComposition({scene, scenes, index, D, startAt, layout, preset, energy, transition, title, wordCaptions}) {
-  const p = `s${index}`;
-  const factor = 0.45 + Math.max(0, Math.min(100, Number(energy) || 0)) / 100;
-  const cfg = PRESETS[preset] || PRESETS.showcase;
-  const ctx = {p, scene, scenes, D, travel: cfg.travel * factor, zoom: cfg.zoom * factor};
-  const bg = bgFor(layout, scene, index), dark = [P.ink, P.orange].includes(bg);
-  ctx.dark = dark;
-  const build = LAYOUT_BUILDERS[layout] || LAYOUT_BUILDERS.kinetic_hook;
-  const body = build(ctx);
-  const deco = decoration(p, preset, dark, D);
-  const cap = captions(p, scene, wordCaptions, startAt, D, dark);
-  const brand = `<div style="position:absolute;top:104px;left:72px;display:flex;gap:14px;align-items:center;z-index:20;"><div style="background:${P.orange};color:#fff;font-size:23px;font-weight:900;border-radius:10px;padding:8px 11px;letter-spacing:-1px;">PS</div><div style="font-size:33px;font-weight:900;letter-spacing:-1.2px;color:${dark ? '#fff' : P.ink};">PropShort</div></div>`;
-  const track = `<div style="position:absolute;height:8px;bottom:72px;left:70px;right:70px;border-radius:20px;background:${dark ? 'rgba(255,255,255,.27)' : 'rgba(24,24,24,.14)'};overflow:hidden;"><div id="${p}-bar" style="height:100%;width:100%;background:${dark ? '#fff' : P.orange};transform-origin:left center;"></div></div>`;
-  return `<template>
+// Which scenes carry a real picture (uploaded photo or paid AI image) versus local placeholder art?
+// Placeholder scenes borrow the nearest real picture (re-cropped by a different camera move), so the
+// two paid images in a six-scene reel are used across the whole film instead of leaving gradient scenes.
+function resolveImages(scenes) {
+  const real = scenes.map((s) => Boolean(s.__asset) && (s.visual_source === 'uploaded' || s.image_real !== false));
+  const realIdx = real.map((r, i) => (r ? i : -1)).filter((i) => i >= 0);
+  const out = [];
+  scenes.forEach((s, i) => {
+    if (real[i]) { out.push({src: s.__asset, real: true, reused: false, from: i}); return; }
+    if (!realIdx.length) { out.push({src: s.__asset || null, real: false, reused: false, from: i}); return; }
+    // Prefer a different picture than the scene before; among equals, the nearest one.
+    const prev = out[i - 1]?.from;
+    const ranked = [...realIdx].sort((a, b) => (Number(a === prev) - Number(b === prev)) || (Math.abs(a - i) - Math.abs(b - i)));
+    out.push({src: scenes[ranked[0]].__asset, real: true, reused: true, from: ranked[0]});
+  });
+  return out;
+}
+
+export async function buildProject({jobDir, projectDir, plan, creativePlan, creativePreset = 'showcase', creativeTransition = 'slide', wordCaptions = [], title = 'ReelForge', musicFile = process.env.BACKGROUND_MUSIC}) {
+  const scenes = (plan.scenes || []).map((s) => ({...s}));
+  if (!scenes.length) throw new Error('Storyboard has no scenes');
+  await resetDir(projectDir);
+  for (const d of ['compositions', 'assets', 'lib']) await fs.mkdir(path.join(projectDir, d), {recursive: true});
+
+  // Assets are copied, not linked: the project must be self-contained for the renderer.
+  for (let i = 0; i < scenes.length; i++) {
+    const src = path.join(jobDir, `scene-${i}.png`);
+    if (await exists(src)) {
+      await fs.copyFile(src, path.join(projectDir, 'assets', `scene-${i}.png`));
+      scenes[i].__asset = `assets/scene-${i}.png`;
+    }
+  }
+  await fs.copyFile(require.resolve('gsap/dist/gsap.min.js'), path.join(projectDir, 'lib', 'gsap.min.js'));
+
+  const narration = path.join(jobDir, 'narration.mp3');
+  const hasAudio = await exists(narration);
+  let audio = null;
+  if (hasAudio) {
+    await fs.copyFile(narration, path.join(projectDir, 'assets', 'narration.mp3'));
+    audio = await analyzeNarration(narration);
+  }
+  const timing = planTimeline({scenes, audio, whisper: wordCaptions});
+  const total = timing.total;
+
+  const hasMusic = Boolean(musicFile) && await exists(musicFile);
+  if (hasMusic) await fs.copyFile(musicFile, path.join(projectDir, 'assets', 'music' + (path.extname(musicFile) || '.mp3')));
+
+  const images = resolveImages(scenes);
+  const seed = Number(creativePlan?.seed ?? 20260101) >>> 0;
+  const labels = scenes.map((s) => clean(s.subtitle || headlineText(s), 44));
+  const hosts = [];
+  const layouts = pickLayouts(scenes, creativePlan);
+
+  for (let i = 0; i < scenes.length; i++) {
+    const slot = timing.scenes[i];
+    const ov = i === 0 ? 0 : OVERLAP;
+    const hostStart = Number((slot.start - ov).toFixed(3));
+    const D = Number((slot.end - hostStart).toFixed(3));
+    const layout = layouts[i];
+    const tr = scenes[i]?.graphic?.transition || creativePlan?.transitions?.[i] || LEGACY_TRANSITIONS[i % LEGACY_TRANSITIONS.length] || creativeTransition;
+    const p = `s${i}`;
+    const rng = mulberry32(seed * 7919 + i * 104729 + 17);
+    const ctx = {
+      p, scene: scenes[i], scenes, index: i, n: scenes.length, D, ov, t0: Number((ov * 0.6).toFixed(3)),
+      entrance: ENTRANCES[(seed + i) % ENTRANCES.length], rng, img: images[i],
+      pool: [...new Set(images.filter((m) => m.real).map((m) => m.src))].map((src) => ({src, real: true})),
+      labels: labels.slice(i + 1).concat(labels.slice(0, i + 1)),
+    };
+    const body = buildLayout(layout, ctx);
+    const html = `<template>
   <style>
     #root{position:absolute;inset:0;font-family:Inter,Arial,Helvetica,sans-serif;overflow:hidden;}
     #root img{display:block;}
   </style>
   <div id="root" data-composition-id="${p}" data-width="${W}" data-height="${H}">
-    <div id="${p}-bg" class="clip" data-start="0" data-duration="${D}" data-track-index="0" style="position:absolute;inset:0;background:${bg};color:${dark ? '#fff' : P.ink};overflow:hidden;">
-      ${deco.html}
+    <div id="${p}-clip" class="clip" data-start="0" data-duration="${D}" data-track-index="0" style="position:absolute;inset:0;overflow:hidden;">
       <div id="${p}-stage" style="position:absolute;inset:0;">${body.html}</div>
-      ${brand}
-      ${cap.html}
-      ${track}
+      <div id="${p}-edge" data-layout-allow-overflow style="${edgeStyle(tr)}"></div>
     </div>
   </div>
   <script>
     const tl = gsap.timeline({ paused: true });
-    ${deco.js}
-    ${stageTweens(p, transition, ctx.travel, D)}
+    ${transitionIn(tr, p, ov)}
     ${body.js}
-    ${cap.js}
-    tl.fromTo("#${p}-bar",{scaleX:0},{scaleX:1,duration:${D},ease:"none"},0);
     window.__timelines["${p}"] = tl;
   </script>
 </template>
 `;
-}
-
-// Creates or refreshes `projectDir` from a job directory. Returns {projectDir, duration, scenes}.
-export async function buildProject({jobDir, projectDir, plan, creativePlan, creativePreset = 'showcase', creativeIntensity = 70, creativeTransition = 'slide', wordCaptions = [], title = 'ReelForge'}) {
-  const scenes = (plan.scenes || []).map((s) => ({...s}));
-  if (!scenes.length) throw new Error('Storyboard has no scenes');
-  await fs.rm(projectDir, {recursive: true, force: true});
-  await fs.mkdir(path.join(projectDir, 'compositions'), {recursive: true});
-  await fs.mkdir(path.join(projectDir, 'assets'), {recursive: true});
-  // Assets are copied, not linked: the project must be self-contained for the renderer.
-  for (let i = 0; i < scenes.length; i++) {
-    const src = path.join(jobDir, `scene-${i}.png`);
-    if (await fs.stat(src).then(() => true, () => false)) {
-      await fs.copyFile(src, path.join(projectDir, 'assets', `scene-${i}.png`));
-      scenes[i].__asset = `assets/scene-${i}.png`;
-    }
+    await fs.writeFile(path.join(projectDir, 'compositions', `${p}.html`), html);
+    // Alternate lanes so the overlapping transition frames never share one; later scenes paint on top.
+    hosts.push(`    <div id="${p}" data-composition-id="${p}" data-composition-src="compositions/${p}.html" data-start="${hostStart}" data-duration="${D}" data-track-index="${1 + (i % 2)}" data-track-kind="graphics" data-width="${W}" data-height="${H}" style="z-index:${10 + i};"></div>`);
   }
-  const narration = path.join(jobDir, 'narration.mp3');
-  const hasAudio = await fs.stat(narration).then(() => true, () => false);
-  if (hasAudio) await fs.copyFile(narration, path.join(projectDir, 'assets', 'narration.mp3'));
 
-  let at = 0;
-  const hosts = [];
-  for (let i = 0; i < scenes.length; i++) {
-    const D = Math.max(0.1, Number(scenes[i].duration) || 5);
-    const layout = scenes[i]?.graphic?.layout || creativePlan?.layouts?.[i] || LEGACY_LAYOUTS[Math.min(i, LEGACY_LAYOUTS.length - 1)];
-    const html = sceneComposition({
-      scene: scenes[i], scenes, index: i, D, startAt: at, layout, title, wordCaptions,
-      preset: scenes[i]?.graphic?.motion_preset || creativePreset,
-      energy: scenes[i]?.graphic?.motion_intensity ?? creativePlan?.energy ?? creativeIntensity,
-      transition: scenes[i]?.graphic?.transition || creativePlan?.transitions?.[i] || creativeTransition,
-    });
-    await fs.writeFile(path.join(projectDir, 'compositions', `s${i}.html`), html);
-    hosts.push(`    <div id="s${i}" data-composition-id="s${i}" data-composition-src="compositions/s${i}.html" data-start="${at.toFixed(3)}" data-duration="${D}" data-track-index="1" data-track-kind="graphics" data-width="${W}" data-height="${H}"></div>`);
-    at += D;
-  }
-  const total = Number(at.toFixed(3));
+  await fs.writeFile(path.join(projectDir, 'compositions', 'captions.html'), captionsComposition({words: timing.words, total}));
+  await fs.writeFile(path.join(projectDir, 'compositions', 'chrome.html'), chromeComposition({total}));
+  const musicTag = hasMusic
+    ? `      <audio id="music" class="clip" src="assets/music${path.extname(musicFile) || '.mp3'}" data-start="0" data-duration="${total}" data-track-index="5" data-volume="0.13" data-fade-out="1.2"></audio>\n` : '';
+
   const index = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=${W}, height=${H}" />
-    <script src="${GSAP}"></script>
+    <script src="lib/gsap.min.js"></script>
     <style>
       *{margin:0;padding:0;box-sizing:border-box;}
       html,body{margin:0;width:${W}px;height:${H}px;overflow:hidden;background:${P.ink};}
@@ -154,13 +171,13 @@ export async function buildProject({jobDir, projectDir, plan, creativePlan, crea
   <body>
     <div id="root" data-composition-id="main" data-start="0" data-duration="${total}" data-width="${W}" data-height="${H}">
 ${hosts.join('\n')}
-${hasAudio ? `      <audio id="narration" class="clip" src="assets/narration.mp3" data-start="0" data-track-index="2" data-volume="1"></audio>` : ''}
-    </div>
+      <div id="captions" data-composition-id="captions" data-composition-src="compositions/captions.html" data-start="0" data-duration="${total}" data-track-index="3" data-track-kind="captions" data-width="${W}" data-height="${H}" style="z-index:60;"></div>
+      <div id="chrome" data-composition-id="chrome" data-composition-src="compositions/chrome.html" data-start="0" data-duration="${total}" data-track-index="4" data-track-kind="graphics" data-width="${W}" data-height="${H}" style="z-index:70;"></div>
+${hasAudio ? `      <audio id="narration" class="clip" src="assets/narration.mp3" data-start="0" data-track-index="2" data-volume="1"></audio>\n` : ''}${musicTag}    </div>
     <script>
       window.__timelines = window.__timelines || {};
       const tl = gsap.timeline({ paused: true });
       window.__timelines["main"] = tl;
-      tl.seek(0);
     </script>
   </body>
 </html>
@@ -168,14 +185,16 @@ ${hasAudio ? `      <audio id="narration" class="clip" src="assets/narration.mp3
   await fs.writeFile(path.join(projectDir, 'index.html'), index);
   await fs.writeFile(path.join(projectDir, 'hyperframes.json'), JSON.stringify({paths: {blocks: 'compositions', components: 'compositions/components', assets: 'assets'}}, null, 2));
   await fs.writeFile(path.join(projectDir, 'meta.json'), JSON.stringify({id: path.basename(projectDir), name: clean(title, 60), generatedBy: 'reelforge'}, null, 2));
-  return {projectDir, duration: total, scenes: scenes.length};
+  return {projectDir, duration: total, scenes: scenes.length, timing: {source: timing.source, total, slots: timing.scenes}};
 }
 
-const cliBin = (root) => path.join(root, 'node_modules', '.bin', 'hyperframes');
-function run(cmd, args, opts = {}) {
+// Run the CLI through `node` on its real entry file. The .bin shim is a shell script on Windows,
+// which child_process.spawn cannot execute directly (ENOENT/EINVAL).
+const cliEntry = (root) => path.join(root, 'node_modules', 'hyperframes', 'bin', 'hyperframes.mjs');
+function run(entry, args, opts = {}) {
   return new Promise((resolve, reject) => {
     let out = '';
-    const child = spawn(cmd, args, {...opts, stdio: ['ignore', 'pipe', 'pipe']});
+    const child = spawn(process.execPath, [entry, ...args], {...opts, stdio: ['ignore', 'pipe', 'pipe']});
     const keep = (d) => { out = (out + d.toString()).slice(-6000); };
     child.stdout.on('data', keep); child.stderr.on('data', keep);
     child.on('error', reject);
@@ -183,12 +202,12 @@ function run(cmd, args, opts = {}) {
   });
 }
 
-// Lint/validate the generated project. Returns the CLI's text output; throws on errors.
-export const checkProject = (root, projectDir) => run(cliBin(root), ['check', '--json'], {cwd: projectDir, env: process.env});
+// Lint/validate the generated project. Resolves with the CLI's text output; rejects on errors.
+export const checkProject = (root, projectDir) => run(cliEntry(root), ['check', '--json'], {cwd: projectDir, env: process.env});
 
 export async function renderProject({root, projectDir, output, quality = process.env.HYPERFRAMES_QUALITY || 'delivery', fps = 30}) {
   await fs.mkdir(path.dirname(output), {recursive: true});
-  return run(cliBin(root), ['render', '--output', output, '--quality', quality, '--fps', String(fps)], {cwd: projectDir, env: process.env});
+  return run(cliEntry(root), ['render', '--output', output, '--quality', quality, '--fps', String(fps)], {cwd: projectDir, env: process.env});
 }
 
-export {LAYOUT_NAMES, here as moduleDir};
+export {LAYOUT_NAMES, here as moduleDir, num, esc};
