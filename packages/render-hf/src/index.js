@@ -21,6 +21,7 @@ import {planTimeline} from './timing.js';
 import {analyzeNarration} from './audio.js';
 import {captionsComposition} from './captions.js';
 import {chromeComposition} from './chrome.js';
+import {FONT_STACK, DEV_RE, fontFaceCss} from './fonts.js';
 import {sceneBeats, impactMoments} from './beats.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -98,7 +99,7 @@ function resolveImages(scenes) {
   return out;
 }
 
-export async function buildProject({jobDir, projectDir, plan, creativePlan, creativePreset = 'showcase', creativeTransition = 'slide', wordCaptions = [], title = 'ReelForge', musicFile = process.env.BACKGROUND_MUSIC}) {
+export async function buildProject({jobDir, projectDir, plan, creativePlan, creativePreset = 'showcase', creativeTransition = 'slide', wordCaptions = [], title = 'ReelForge', musicFile = process.env.BACKGROUND_MUSIC, language = 'en'}) {
   const scenes = (plan.scenes || []).map((s) => ({...s}));
   if (!scenes.length) throw new Error('Storyboard has no scenes');
   await resetDir(projectDir);
@@ -116,6 +117,13 @@ export async function buildProject({jobDir, projectDir, plan, creativePlan, crea
     }
   }
   await fs.copyFile(require.resolve('gsap/dist/gsap.min.js'), path.join(projectDir, 'lib', 'gsap.min.js'));
+  // Hindi (Devanagari) anywhere in the script, or a Hindi job: ship the font and declare it in every composition.
+  const useDev = language !== 'en' || DEV_RE.test(JSON.stringify(scenes.map((s) => [s.narration, s.subtitle, s.graphic])));
+  if (useDev) {
+    await fs.mkdir(path.join(projectDir, 'assets', 'fonts'), {recursive: true});
+    await fs.copyFile(path.join(here, '..', 'assets', 'fonts', 'NotoSansDevanagari.ttf'), path.join(projectDir, 'assets', 'fonts', 'NotoSansDevanagari.ttf'));
+  }
+  const fontCss = useDev ? fontFaceCss() : '';
 
   const narration = path.join(jobDir, 'narration.mp3');
   const hasAudio = await exists(narration);
@@ -152,6 +160,7 @@ export async function buildProject({jobDir, projectDir, plan, creativePlan, crea
     const ctx = {
       p, scene: scenes[i], scenes, index: i, n: scenes.length, D, ov, t0: Number((ov * 0.6).toFixed(3)),
       words, beats: sceneBeats(words, D),
+      lang: (language === 'hi' || DEV_RE.test(`${scenes[i]?.graphic?.headline || ''}${scenes[i]?.subtitle || ''}`)) ? 'hi' : 'en',
       shots: images.filter((m) => m.kind === 'screenshot' && m.w && m.h).map((m) => ({src: m.src, w: m.w, h: m.h})),
       impacts: layout === 'brand_endcard' ? [] : impactMoments(words, D, {hint: scenes[i]?.graphic?.highlight, max: D > 7 ? 3 : 2}),
       entrance: ENTRANCES[(seed + i) % ENTRANCES.length], rng, img: images[i],
@@ -161,7 +170,8 @@ export async function buildProject({jobDir, projectDir, plan, creativePlan, crea
     const body = buildLayout(layout, ctx);
     const html = `<template>
   <style>
-    #root{position:absolute;inset:0;font-family:Inter,Arial,Helvetica,sans-serif;overflow:hidden;}
+    ${fontCss}
+    #root{position:absolute;inset:0;font-family:${FONT_STACK};overflow:hidden;}
     #root img{display:block;}
   </style>
   <div id="root" data-composition-id="${p}" data-width="${W}" data-height="${H}">
@@ -183,8 +193,8 @@ export async function buildProject({jobDir, projectDir, plan, creativePlan, crea
     hosts.push(`    <div id="${p}" data-composition-id="${p}" data-composition-src="compositions/${p}.html" data-start="${hostStart}" data-duration="${D}" data-track-index="${1 + (i % 2)}" data-track-kind="graphics" data-width="${W}" data-height="${H}" style="z-index:${10 + i};"></div>`);
   }
 
-  if (karaoke) await fs.writeFile(path.join(projectDir, 'compositions', 'captions.html'), captionsComposition({words: timing.words, total}));
-  await fs.writeFile(path.join(projectDir, 'compositions', 'chrome.html'), chromeComposition({total}));
+  if (karaoke) await fs.writeFile(path.join(projectDir, 'compositions', 'captions.html'), captionsComposition({words: timing.words, total, fontCss}));
+  await fs.writeFile(path.join(projectDir, 'compositions', 'chrome.html'), chromeComposition({total, fontCss}));
   const musicTag = hasMusic
     ? `      <audio id="music" class="clip" src="assets/music${path.extname(musicFile) || '.mp3'}" data-start="0" data-duration="${total}" data-track-index="5" data-volume="0.13" data-fade-out="1.2"></audio>\n` : '';
 

@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import {narrationCode,screenCode,narrationBudget,languageClause,hindiDemo} from './language.js';
 import sharp from 'sharp';
 
 const requireKey=(key)=>{if(!process.env[key])throw new Error(`${key} is missing. Set DEMO_MODE=true or add it to .env`);return process.env[key]};
@@ -33,11 +34,13 @@ const anthropicText=async(model,system,user,maxTokens=1800)=>{
 };
 function parseJson(text){const clean=text.replace(/^```(?:json)?\s*/i,'').replace(/```\s*$/,'').trim();try{return JSON.parse(clean)}catch{} const match=clean.match(/\{[\s\S]*\}/);if(!match)throw new Error('Model did not return JSON');return JSON.parse(match[0]);}
 const defaultScene=(i,topic)=>({duration:[3,4,5,6,6,6][i],narration:[`Here's something worth knowing about ${topic}.`,`Why does ${topic} matter right now?`,`The first practical insight could change your workflow.`,`Try a small experiment before scaling up.`,`Measure what works and improve one detail.`,`Follow for more practical ideas about ${topic}.`][i],subtitle:[`LET'S TALK ${topic.toUpperCase()}`,`WHY IT MATTERS`,`START SMALL`,`TRY IT TODAY`,`MEASURE RESULTS`,`SAVE THIS IDEA`][i],image_prompt:`Professional editorial illustration of ${topic}, scene ${i+1}, cinematic light, vertical 9:16 composition, no text`});
-export const demoPlan=(topic)=>({title:`${topic}: 3 Quick Insights`,idea:`A practical 30-second introduction to ${topic}`,hook:`Here's what you need to know about ${topic}`,scenes:Array.from({length:6},(_,i)=>defaultScene(i,topic))});
+export const demoPlan=(topic,language='en')=>{const scenes=Array.from({length:6},(_,i)=>defaultScene(i,topic));
+ if(narrationCode(language)==='hi'){const d=hindiDemo(topic,language);scenes.forEach((s,i)=>{s.narration=d.narration[i];if(d.subtitle)s.subtitle=d.subtitle[i]})}
+ return {title:`${topic}: 3 Quick Insights`,idea:`A practical 30-second introduction to ${topic}`,hook:`Here's what you need to know about ${topic}`,scenes};};
 const model=(key,fallback)=>process.env[key]||fallback;
-export async function createPlan(topic,real){if(!real)return demoPlan(topic);
+export async function createPlan(topic,real,language='en'){if(!real)return demoPlan(topic,language);
  const idea=await anthropicText(model('CLAUDE_IDEA_MODEL','claude-haiku-4-5'),'You are a factual short-form video strategist. Never invent sources. Be original.',`Suggest one strong practical idea and a concise hook for a 30-second Instagram/Facebook/YouTube Reel on: ${bounded(topic,3500)}. Return plain text.`,500);
- const draft=await anthropicText(model('CLAUDE_SCRIPT_MODEL','claude-sonnet-4-5'),'You write original short-form storyboards. Return ONLY valid JSON; no markdown.',`Create a strong 30-second vertical Reel plan based on topic ${bounded(topic,3500)} and strategy ${idea}. Return JSON {title,idea,hook,scenes:[{duration,narration,subtitle,image_prompt,shot_type,motion_prompt,graphic:{headline,highlight,subheading}}]}, EXACTLY six scenes with durations [3,4,5,6,6,6] seconds respectively. The narration of all scenes is read aloud as ONE continuous voiceover of about 28 seconds, so the TOTAL across all six scenes must be 54-62 words (about 10 per scene, hard maximum 12 for any scene; count them), conversational, no stage directions; scene 1 is a specific hook and scene 6 ends with a short call to action. graphic.headline is the punchy on-screen line for that scene (2-6 words, not a copy of the narration), graphic.highlight is the single word of that headline that matters most, graphic.subheading is optional (max 8 words). Put any key number in the headline of the scene that states it. Use varied wide/close/detail/demo shots, original realistic visuals, strong narrative progression. image_prompt excludes any written text. motion_prompt describes one continuous realistic physical action and camera move, no cuts, no morphing, no generated text. Keep facts defensible and do not invent sources.`,2800);
+ const draft=await anthropicText(model('CLAUDE_SCRIPT_MODEL','claude-sonnet-4-5'),'You write original short-form storyboards. Return ONLY valid JSON; no markdown.',`Create a strong 30-second vertical Reel plan based on topic ${bounded(topic,3500)} and strategy ${idea}. Return JSON {title,idea,hook,scenes:[{duration,narration,subtitle,image_prompt,shot_type,motion_prompt,graphic:{headline,highlight,subheading}}]}, EXACTLY six scenes with durations [3,4,5,6,6,6] seconds respectively. The narration of all scenes is read aloud as ONE continuous voiceover of about 28 seconds, so ${narrationBudget(language).prompt}, conversational, no stage directions; scene 1 is a specific hook and scene 6 ends with a short call to action. graphic.headline is the punchy on-screen line for that scene (2-6 words, not a copy of the narration), graphic.highlight is the single word of that headline that matters most, graphic.subheading is optional (max 8 words). Put any key number in the headline of the scene that states it. Use varied wide/close/detail/demo shots, original realistic visuals, strong narrative progression. image_prompt excludes any written text. motion_prompt describes one continuous realistic physical action and camera move, no cuts, no morphing, no generated text. Keep facts defensible and do not invent sources. ${languageClause(language)}`,2800);
  const plan=parseJson(draft);return validatePlan(plan,topic);
 }
 
@@ -67,8 +70,8 @@ export async function evaluate(plan,real,revision){if(!real)return {score:revisi
 // The six narrations are read as one voiceover (real pace with pauses is ~2 words/second, so ~60 words for a 30 second Reel). Models overshoot word limits, which makes the Reel run
 // long, so this checks the total and, only when needed, asks the cheap evaluator-class model to tighten the copy.
 export const narrationWords=(plan)=>plan.scenes.reduce((n,s)=>n+String(s.narration||'').split(/\s+/).filter(Boolean).length,0);
-export async function tightenNarration(plan,real){
- const max=Number(process.env.NARRATION_MAX_WORDS||66);const before=narrationWords(plan);
+export async function tightenNarration(plan,real,language='en'){
+ const max=narrationBudget(language).cap;const before=narrationWords(plan);
  if(!real||before<=max)return {plan,before,after:before,rewritten:false};
  let cur=plan,tries=0,error;
  // Models overshoot, so ask for a lower per-scene budget than the cap and allow one retry.
@@ -76,7 +79,7 @@ export async function tightenNarration(plan,real){
   tries++;
   try{
    const budget=Math.max(6,Math.floor((max-12)/6)-(tries-1));
-   const result=await anthropicText(model('CLAUDE_EVALUATOR_MODEL','claude-haiku-4-5'),'You tighten voiceover copy without losing facts. Return JSON only.',`Rewrite each scene's narration so every scene has at most ${budget} spoken words (count them; total under ${max-8}). Keep the meaning, concrete numbers, the hook in scene 1 and the call to action in scene 6. Plain conversational sentences, no stage directions. Return {narrations:[six strings]}. Scenes: ${JSON.stringify(cur.scenes.map(x=>x.narration))}`,900);
+   const result=await anthropicText(model('CLAUDE_EVALUATOR_MODEL','claude-haiku-4-5'),'You tighten voiceover copy without losing facts. Return JSON only.',`Rewrite each scene's narration so every scene has at most ${budget} spoken words (count them; total under ${max-8}). Keep the meaning, concrete numbers, the hook in scene 1 and the call to action in scene 6. Plain conversational sentences, no stage directions. Keep every narration in the same language and script as the input (${narrationCode(language)==='hi'?'Hindi in Devanagari':'English'}). Return {narrations:[six strings]}. Scenes: ${JSON.stringify(cur.scenes.map(x=>x.narration))}`,900);
    const list=parseJson(result).narrations;
    if(!Array.isArray(list)||list.length!==cur.scenes.length||list.some(x=>typeof x!=='string'||!x.trim()))throw new Error('unusable rewrite');
    const next=structuredClone(cur);next.scenes.forEach((x,i)=>{x.narration=bounded(list[i],220)});
@@ -86,9 +89,9 @@ export async function tightenNarration(plan,real){
  }
  return {plan:cur,before,after:narrationWords(cur),rewritten:cur!==plan,...(error?{error}:{})};
 }
-export async function improve(plan,evaluation,real){const next=structuredClone(plan);
- if(!real){next.hook=`Stop scrolling — ${plan.hook}`;next.scenes[0].subtitle='WAIT — THIS CHANGES EVERYTHING';next.scenes[0].image_prompt+=' dramatic close-up, energetic visual hook';next.scenes[1].subtitle='HERE IS WHY';return {plan:next,changed:[0,1]};}
- const result=await anthropicText(model('CLAUDE_OPTIMIZER_MODEL','claude-sonnet-4-5'),'Improve only weak scenes. Keep a factual, original story. Return only JSON.',`Given plan ${JSON.stringify(plan)} and evaluation ${JSON.stringify(evaluation)}, return {changes:[{index:0..5,narration,subtitle,image_prompt,motion_prompt}]}. Change up to 2 weak scenes only, maintain scene count and existing durations, do not change shot types unless needed. Narration is read aloud as one ~30 second voiceover: keep each scene's narration at most 12 words and the total under 62 words.`,1900);
+export async function improve(plan,evaluation,real,language='en'){const next=structuredClone(plan);const bud=narrationBudget(language);
+ if(!real){next.hook=`Stop scrolling — ${plan.hook}`;next.scenes[0].subtitle=screenCode(language)==='hi'?'रुकिए — सब कुछ बदलने वाला है':'WAIT — THIS CHANGES EVERYTHING';next.scenes[0].image_prompt+=' dramatic close-up, energetic visual hook';next.scenes[1].subtitle=screenCode(language)==='hi'?'यह है असली वजह':'HERE IS WHY';return {plan:next,changed:[0,1]};}
+ const result=await anthropicText(model('CLAUDE_OPTIMIZER_MODEL','claude-sonnet-4-5'),'Improve only weak scenes. Keep a factual, original story. Return only JSON.',`Given plan ${JSON.stringify(plan)} and evaluation ${JSON.stringify(evaluation)}, return {changes:[{index:0..5,narration,subtitle,image_prompt,motion_prompt}]}. Change up to 2 weak scenes only, maintain scene count and existing durations, do not change shot types unless needed. Narration is read aloud as one ~30 second voiceover: keep each scene's narration at most ${bud.perScene} words and the total under ${bud.max} words. ${languageClause(language)}`,1900);
  const obj=parseJson(result);const changed=[];for(const c of (obj.changes||[]).slice(0,2)){if(!Number.isInteger(c.index)||c.index<0||c.index>5)continue;next.scenes[c.index]={...next.scenes[c.index],motion_prompt:bounded(c.motion_prompt,450)||next.scenes[c.index].motion_prompt,narration:bounded(c.narration,220)||next.scenes[c.index].narration,subtitle:bounded(c.subtitle,95)||next.scenes[c.index].subtitle,image_prompt:bounded(c.image_prompt,900)||next.scenes[c.index].image_prompt};changed.push(c.index)}return {plan:next,changed};}
 const makeSvg=(prompt,i)=>{const palettes=[['#180f41','#723cbd'],['#082d39','#136c8b'],['#321339','#b64f88'],['#1f253c','#6980c4'],['#133e36','#49a488'],['#3f2419','#cf9058']];const [a,b]=palettes[i%palettes.length];const safe=prompt.replace(/[<>&"']/g,' ').slice(0,72);return `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient><radialGradient id="r"><stop stop-color="#fff" stop-opacity=".36"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><rect width="1080" height="1920" fill="url(#g)"/><circle cx="770" cy="650" r="600" fill="url(#r)"/><circle cx="200" cy="1200" r="390" stroke="white" stroke-opacity=".3" stroke-width="8" fill="none"/><path d="M0 1080 Q500 620 1080 1320 L1080 1920 L0 1920Z" fill="#fff" opacity=".075"/><g font-family="sans-serif" font-weight="bold" fill="white" text-anchor="middle"><text x="540" y="720" font-size="76" opacity=".45">SCENE ${i+1}</text><text x="540" y="850" font-size="46">AI GENERATED DEMO ART</text></g></svg>`};
 export async function makeImage(scene, i, outputPath, real) {
@@ -163,11 +166,11 @@ export async function makeImage(scene, i, outputPath, real) {
   throw new Error(`OpenRouter image generation failed: ${errors.join(' | ').slice(0, 1000)}`);
 }
 
-export async function makeAudio(text,outputPath,real){if(!real)return {provider:'espeak/local fallback',generated:false};
+export async function makeAudio(text,outputPath,real,language='en'){if(!real)return {provider:'espeak/local fallback',generated:false};
  const errors=[];
  if(process.env.ELEVENLABS_API_KEY&&process.env.ELEVENLABS_VOICE_ID){
  const speak=async(voice)=>{
-  const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}`,{method:'POST',headers:{'xi-api-key':process.env.ELEVENLABS_API_KEY,'content-type':'application/json'},body:JSON.stringify({text,model_id:model('ELEVENLABS_MODEL','eleven_flash_v2_5'),output_format:'mp3_44100_128'}),signal:AbortSignal.timeout(Number(process.env.LLM_TIMEOUT_MS||180000))});
+  const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}`,{method:'POST',headers:{'xi-api-key':process.env.ELEVENLABS_API_KEY,'content-type':'application/json'},body:JSON.stringify({text,model_id:model('ELEVENLABS_MODEL','eleven_flash_v2_5'),output_format:'mp3_44100_128',...(narrationCode(language)==='hi'?{language_code:'hi'}:{})}),signal:AbortSignal.timeout(Number(process.env.LLM_TIMEOUT_MS||180000))});
   if(!res.ok)throw new Error(`ElevenLabs ${res.status}: ${(await res.text()).slice(0,240)}`);
   await fs.writeFile(outputPath,Buffer.from(await res.arrayBuffer()));
  };
@@ -184,7 +187,7 @@ export async function makeAudio(text,outputPath,real){if(!real)return {provider:
  }}
  // Kokoro self-hosted through a compatible /v1/audio/speech HTTP endpoint, e.g. Kokoro-FastAPI.
  try{const base=(process.env.KOKORO_API_BASE||'http://localhost:8880/v1').replace(/\/$/,'');const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),120000);try{
- const res=await fetch(`${base}/audio/speech`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'kokoro',input:text,voice:process.env.KOKORO_VOICE||'af_heart',response_format:'mp3'}),signal:controller.signal});if(!res.ok)throw new Error(`Kokoro ${res.status}: ${(await res.text()).slice(0,200)}`);await fs.writeFile(outputPath,Buffer.from(await res.arrayBuffer()));return {provider:'kokoro',generated:true};
+ const res=await fetch(`${base}/audio/speech`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'kokoro',input:text,voice:narrationCode(language)==='hi'?(process.env.KOKORO_VOICE_HI||'hf_alpha'):(process.env.KOKORO_VOICE||'af_heart'),response_format:'mp3'}),signal:controller.signal});if(!res.ok)throw new Error(`Kokoro ${res.status}: ${(await res.text()).slice(0,200)}`);await fs.writeFile(outputPath,Buffer.from(await res.arrayBuffer()));return {provider:'kokoro',generated:true};
  }finally{clearTimeout(timer)}}catch(e){errors.push(e.message)}
  throw new Error(`No narration provider available. Add ElevenLabs credentials or start a Kokoro-compatible server. Details: ${errors.join(' | ').slice(0,350)}`);
 }

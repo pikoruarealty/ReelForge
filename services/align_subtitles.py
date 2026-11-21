@@ -3,6 +3,7 @@ Usage: python3 services/align_subtitles.py narration.mp3 word-captions.json subt
 This runs ASR on generated narration; timestamps are estimates, not forced alignment.
 """
 import json
+import os
 import sys
 from pathlib import Path
 from faster_whisper import WhisperModel
@@ -13,8 +14,10 @@ def stamp(t):
 
 def main():
     source, json_out, srt_out = map(Path, sys.argv[1:4])
-    model = WhisperModel('tiny.en', device='cpu', compute_type='int8')
-    segments, _ = model.transcribe(str(source), word_timestamps=True, vad_filter=True, language='en')
+    lang = sys.argv[4] if len(sys.argv) > 4 else 'en'
+    # tiny.en is English-only; other languages (Hindi) need a multilingual model. Override with WHISPER_MODEL.
+    model = WhisperModel(os.environ.get('WHISPER_MODEL') or ('tiny.en' if lang == 'en' else 'small'), device='cpu', compute_type='int8')
+    segments, _ = model.transcribe(str(source), word_timestamps=True, vad_filter=True, language=lang)
     words = []
     for segment in segments:
         for w in segment.words or []:

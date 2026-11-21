@@ -7,9 +7,9 @@
 
 export const splitWords = (text) => String(text || '').split(/\s+/).filter(Boolean);
 
-const letters = (w) => w.replace(/[^\p{L}\p{N}]/gu, '');
+const letters = (w) => w.replace(/[^\p{L}\p{M}\p{N}]/gu, '');
 const weight = (w) => Math.max(2, letters(w).length);
-const pause = (w) => (/[.!?…]["')\]]?$/.test(w) ? 5 : /[,;:—–-]["')\]]?$/.test(w) ? 2.5 : 0);
+const pause = (w) => (/[.!?…।॥]["')\]]?$/.test(w) ? 5 : /[,;:—–-]["')\]]?$/.test(w) ? 2.5 : 0);
 
 // Spread the speech span [start, end] over every narration word. Returns one word array per scene.
 export function estimateWordTimes(scenes, start, end) {
@@ -93,7 +93,7 @@ export function captionGroups(words, {maxWords = 3, maxChars = 16} = {}) {
     const chars = [...cur, next].map((x) => x.text).join(' ').length;
     if (cur.length >= maxWords || (cur.length && chars > maxChars)) flush();
     cur.push(next);
-    if (/[.!?,;:…]$/.test(text)) flush();
+    if (/[.!?,;:…।॥]$/.test(text)) flush();
   }
   flush();
   return groups.map((g, i) => {

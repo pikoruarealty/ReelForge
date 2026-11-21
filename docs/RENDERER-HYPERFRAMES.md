@@ -69,3 +69,21 @@ screenshots were cropped full-bleed, and nothing happened *while* the voice spok
   clause breaks (a wide image is shown whole with one punch-in). Hook and number scenes stay text-only with the next screenshot rising
   from the bottom edge. Old uploads were already cropped to 9:16 and are shown as they are.
 - **Visuals:** faint blueprint grid on brand backdrops, sticker-style stamps, device frame, ripple on clause breaks, scene rhythm alternates dark/cream.
+
+## Hindi (voice and on-screen text)
+Per-job option `language`: `en` (default), `hi` (Hindi voice + Hindi/Devanagari on-screen text) or `hi_voice` (Hindi voice, short English
+on-screen text). UI: "Voice & on-screen language" above "Scene images".
+
+- **Script:** Claude writes narration in conversational Hindi (Devanagari, numbers spelled as Hindi words so they are pronounced correctly)
+  in the same single script call (`apps/api/src/language.js` holds the prompt clauses and word budgets). Revision and tightening passes keep the language.
+- **Voice:** ElevenLabs `eleven_flash_v2_5` with `language_code: "hi"`. Premade voices speak Hindi with their own accent; your configured
+  voice (a professional Indian voice) is blocked on the free plan (402), so the premade fallback is used until you upgrade.
+- **Length:** measured 2.25 Hindi words/second including pauses (96 words = 42.6 s), so the budget is 62-70 words for ~30 s.
+- **Fonts:** Inter has no Devanagari glyphs. Noto Sans Devanagari (SIL OFL, variable weight) ships in `packages/render-hf/assets/fonts/` and is
+  declared in every scene whenever the script contains Devanagari. Devanagari headlines use taller lines, no negative letter-spacing, and a
+  per-character width model so they fit (`devEm` in `layouts.js`).
+- **Motion/timing:** the danda (।) ends a sentence for pacing, beats and caption groups. Hindi number words and units (लाख, करोड़, प्रतिशत) become
+  impact stamps; Hindi stop-words never do. Labels (kickers, end card, city pills) have Hindi versions.
+- **Demo mode:** has no Hindi voice unless the OS has one (espeak-ng `hi`, or a Windows hi-IN voice pack); otherwise narration is silent and
+  `job.audioWarning` says so. Use live mode for real Hindi audio.
+- **Whisper:** `ENABLE_WHISPER=true` uses a multilingual model for Hindi (`WHISPER_MODEL`, default `small`).

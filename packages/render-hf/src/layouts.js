@@ -18,6 +18,7 @@
 import {num, q, enterWords, settleHook} from './motion.js';
 import {spokenAt} from './beats.js';
 import {splitWords} from './timing.js';
+import {DEV_RE} from './fonts.js';
 
 export const P = {orange: '#E65323', hot: '#FF7A3D', coral: '#F17643', ink: '#181818', cream: '#F8F5F0', peach: '#F6DACA', white: '#FFFFFF', muted: '#756E69'};
 // Intersection of the Reels, Shorts and TikTok zones HyperFrames checks: text x 130-880 above y 840, x 130-780 below it.
@@ -30,6 +31,15 @@ export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({'&': '&a
 const join = (...parts) => parts.filter(Boolean).reduce((a, p) => ({html: a.html + p.html, js: a.js + p.js}), {html: '', js: ''});
 const box = (id, css, inner = '', attrs = '') => `<div id="${id}" ${attrs} style="position:absolute;${css}">${inner}</div>`;
 
+// Fixed UI labels in Hindi. A scene uses them when its on-screen language is Hindi (c.lang === 'hi').
+const HI = {
+  'JUST IN': 'ताज़ा ख़बर', 'THE FACT': 'तथ्य', 'ON PROPSHORT': 'PropShort पर', 'BY THE NUMBERS': 'आंकड़ों में', 'MORE STORIES': 'और ख़बरें', 'LIVE': 'लाइव',
+  'THE STORY': 'पूरी कहानी', 'WHY IT MATTERS': 'क्यों ज़रूरी है', 'THE DETAIL': 'ब्योरा', 'THE NUMBERS': 'आंकड़े', 'NEXT': 'आगे',
+  'EXPLORE PROPSHORT ↗': 'PropShort देखें ↗', 'Real estate, filtered for you.': 'रियल एस्टेट की ख़बरें, आपके लिए',
+  'DELHI': 'दिल्ली', 'MUMBAI': 'मुंबई', 'PUNE': 'पुणे', 'CHANDIGARH': 'चंडीगढ़',
+};
+const tr = (c, s) => (c.lang === 'hi' && HI[s]) || s;
+
 // ---- copy -------------------------------------------------------------------------------------------------------
 
 const STOP = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'your', 'you', 'are', 'was', 'from', 'what', 'why', 'how', 'will', 'can', 'not', 'but', 'about']);
@@ -41,7 +51,7 @@ const subText = (scene, max = 90) => clean(scene?.graphic?.subheading || '', max
 
 // The one word that carries the meaning gets the accent colour.
 export function pickHighlight(words, hint) {
-  const norm = (w) => w.toLowerCase().replace(/[^\p{L}\p{N}%₹]/gu, '');
+  const norm = (w) => w.toLowerCase().replace(/[^\p{L}\p{M}\p{N}%₹]/gu, '');
   if (hint) { const i = words.findIndex((w) => norm(w) === norm(hint)); if (i >= 0) return i; }
   const digit = words.findIndex((w) => /\d/.test(w));
   if (digit >= 0) return digit;
@@ -50,18 +60,33 @@ export function pickHighlight(words, hint) {
   return best;
 }
 
+// Width in em of one word of Devanagari/mixed text. Calibrated against real renders of Noto Sans Devanagari at weight 900:
+// consonants and independent vowels ~.75em, spacing vowel signs (ा ि ी ो) ~.38em, combining signs (् े ै ं ़) ~.1em,
+// and ASCII digits are very wide (~.85em). Conjuncts render a little narrower than the sum, so this errs on the safe side.
+function devEm(w) {
+  let e = 0;
+  for (const ch of w) {
+    if (/\p{Mc}/u.test(ch)) e += 0.38;
+    else if (/\p{Mn}/u.test(ch)) e += 0.1;
+    else if (/\d/.test(ch)) e += 0.85;
+    else if (DEV_RE.test(ch)) e += 0.75;
+    else e += /[A-Z]/.test(ch) ? 0.72 : 0.6;
+  }
+  return e;
+}
+
 // Greedy wrap estimate so a headline can be sized to fit its box without measuring in a browser.
 // Calibrated against real renders: Inter 900 averages ~.56-.62em per mixed-case letter (digits, # and : are wider), ~.70-.76em per capital, ~.27em per space.
-function fit(words, {width, max, min, lines, factor, maxH = 0}) {
+function fit(words, {width, max, min, lines, factor, maxH = 0, pitch = 1.21, measure = null}) {
   for (let s = max; s >= min; s -= 4) {
     const cw = s * factor, sp = s * 0.27;
     let ln = 1, cur = 0, ok = true;
     for (const w of words) {
-      const wl = w.length * cw;
+      const wl = measure ? measure(w) * s : w.length * cw;
       if (wl > width) { ok = false; break; }
       if (cur === 0) cur = wl; else if (cur + sp + wl <= width) cur += sp + wl; else { ln++; cur = wl; }
     }
-    if (ok && ln <= lines && (!maxH || ln * s * 1.21 + s * 0.06 <= maxH)) return {size: s, lines: ln};
+    if (ok && ln <= lines && (!maxH || ln * s * pitch + s * 0.06 <= maxH)) return {size: s, lines: ln};
   }
   return {size: min, lines};
 }
@@ -76,7 +101,9 @@ function headline(c, id, text, {top, left = SAFE.l, width = SAFE.w, max = 120, m
   // Copy that is already upper-case (Claude's subtitles often are) is as wide as CSS-uppercased copy.
   const lettersOnly = words.join('').replace(/[^A-Za-z]/g, '');
   const caps = upper || (lettersOnly.length > 2 && lettersOnly === lettersOnly.toUpperCase());
-  const {size, lines: ln} = fit(words.map((w) => (caps ? w.toUpperCase() : w)), {width, max, min, lines, factor: caps ? 0.76 : 0.62, maxH});
+  // Devanagari needs taller lines (vowel marks above and below), no negative letter-spacing, and narrower per-codepoint widths.
+  const dev = DEV_RE.test(text);
+  const {size, lines: ln} = fit(words.map((w) => (caps ? w.toUpperCase() : w)), {width, max, min, lines, factor: caps ? 0.76 : 0.62, maxH, pitch: dev ? 1.41 : 1.21, measure: dev ? devEm : null});
   // The first frame is the thumbnail: the scene-0 headline is on screen at 0 s and only settles.
   const firstFrame = c.index === 0 && (hero || id === 'h');
   const clip = c.entrance === 'maskWords' && !firstFrame;
@@ -89,13 +116,13 @@ function headline(c, id, text, {top, left = SAFE.l, width = SAFE.w, max = 120, m
   const hiStyle = chip
     ? `color:#fff;background:linear-gradient(${P.orange},${P.orange}) no-repeat 0 50%/0% 100%;border-radius:.12em;padding:0 .12em;`
     : `color:${base};`;
-  const spans = words.map((w, k) => `<span style="display:inline-block;${clip ? 'overflow:hidden;' : ''}vertical-align:top;padding:.05em .03em .12em 0;margin-right:.22em;"><span class="wi"${k === hi ? ` id="${i}-hi"` : ''} style="display:inline-block;${k === hi ? hiStyle : ''}">${esc(w)}</span></span>`).join('');
-  const h = Math.round(ln * size * 1.21 + size * 0.06);
+  const spans = words.map((w, k) => `<span style="display:inline-block;${clip ? 'overflow:hidden;' : ''}vertical-align:top;${dev ? 'padding:.14em .03em .16em 0;' : 'padding:.05em .03em .12em 0;'}margin-right:.22em;"><span class="wi"${k === hi ? ` id="${i}-hi"` : ''} style="display:inline-block;${k === hi ? hiStyle : ''}">${esc(w)}</span></span>`).join('');
+  const h = Math.round(ln * size * (dev ? 1.41 : 1.21) + size * 0.06);
   let js = firstFrame ? settleHook(`#${i}`) : enterWords(`#${i} .wi`, c.entrance, c.t0 + at);
   if (hi >= 0 && chip) js += `tl.fromTo(${q('#' + i + '-hi')},{backgroundSize:"0% 100%"},{backgroundSize:"100% 100%",duration:.4,ease:"power3.out"},${num(hiAt)});`;
   else if (hi >= 0 && hiColor !== base) js += `tl.fromTo(${q('#' + i + '-hi')},{color:${q(base)}},{color:${q(hiColor)},duration:.25,ease:"power2.out"},${num(hiAt)});`;
   return {
-    html: box(i, `${flow ? 'position:relative;' : `top:${top}px;left:${left}px;`}width:${width}px;font-size:${size}px;font-weight:900;letter-spacing:${num(-size * 0.028)}px;line-height:1.04;text-align:${align};${upper ? 'text-transform:uppercase;' : ''}color:${base};`, spans),
+    html: box(i, `${flow ? 'position:relative;' : `top:${top}px;left:${left}px;`}width:${width}px;font-size:${size}px;font-weight:900;letter-spacing:${dev ? 0 : num(-size * 0.028)}px;line-height:${dev ? 1.1 : 1.04};text-align:${align};${upper ? 'text-transform:uppercase;' : ''}color:${base};`, spans),
     js, h, size,
   };
 }
@@ -113,7 +140,7 @@ function stack(c, id, parts, {top = 392, gap = 26} = {}) {
 function kicker(c, text, {top = SAFE.t, left = SAFE.l, bg = P.orange, color = P.white, at = 0}) {
   const i = `${c.p}-k`;
   return {
-    html: box(i, `top:${top}px;left:${left}px;padding:10px 24px;border-radius:40px;background:${bg};color:${color};font-size:28px;font-weight:900;letter-spacing:3.5px;white-space:nowrap;`, esc(text)),
+    html: box(i, `top:${top}px;left:${left}px;padding:10px 24px;border-radius:40px;background:${bg};color:${color};font-size:28px;font-weight:900;letter-spacing:${c.lang === 'hi' ? 0 : 3.5}px;white-space:nowrap;`, esc(tr(c, text))),
     js: `tl.fromTo(${q('#' + i)},{opacity:0,x:-36},{opacity:1,x:0,duration:.5,ease:"expo.out"},${num(c.t0 + at)});`,
   };
 }
@@ -197,9 +224,10 @@ function stamps(c, {top, left = SAFE.l, width = SAFE.w, align = 'left', alt = fa
     const n = m.text.length;
     const size = Math.max(44, Math.min(maxSize, n <= 8 ? 116 : n <= 14 ? 96 : n <= 22 ? 76 : 60, Math.floor((width - 70) / (n * 0.7))));
     const rot = k % 2 ? 2.5 : -3;
+    const dev = DEV_RE.test(m.text);
     const right = alt ? k % 2 === 1 : align === 'right';
     html += box(`${id}-w`, `top:${top}px;left:${left}px;width:${width}px;display:flex;justify-content:${right ? 'flex-end' : 'flex-start'};`,
-      `<span id="${id}" style="display:inline-block;max-width:${width}px;padding:.08em .3em .16em;border-radius:.24em;background:${P.orange};color:#fff;font-size:${size}px;font-weight:900;letter-spacing:-.02em;line-height:1.05;box-shadow:0 24px 50px rgba(0,0,0,.32);opacity:0;">${esc(m.text)}</span>`, `${OVF} ${OVL}`);
+      `<span id="${id}" style="display:inline-block;max-width:${width}px;padding:.08em .3em .16em;border-radius:.24em;background:${P.orange};color:#fff;font-size:${size}px;font-weight:900;letter-spacing:${dev ? 0 : -0.02}em;line-height:${dev ? 1.3 : 1.05};box-shadow:0 24px 50px rgba(0,0,0,.32);opacity:0;">${esc(m.text)}</span>`, `${OVF} ${OVL}`);
     js += `tl.fromTo(${q('#' + id)},{opacity:0,scale:.55,rotation:${rot - 9}},{opacity:1,scale:1,rotation:${rot},duration:.42,ease:"back.out(1.9)"},${num(m.t)});`;
     const next = list[k + 1]?.t;
     if (next !== undefined) js += `tl.to(${q('#' + id)},{opacity:0,scale:.9,duration:.2,ease:"power2.in"},${num(next - 0.25)});`;
@@ -292,21 +320,21 @@ function device(c) {
 }
 
 // 4. STAT: one giant number counting up. Falls back to STATEMENT when the copy has no number.
-const NUM = /(₹|rs\.?\s?)?(\d[\d,]*(?:\.\d+)?)\s?(%|cr(?:ore)?s?\b|lakhs?\b|k\b|m\b|x\b|sq\.?\s?ft\b)?/gi;
+const NUM = /(₹|rs\.?\s?)?(\d[\d,]*(?:\.\d+)?)\s?(%|cr(?:ore)?s?\b|lakhs?\b|k\b|m\b|x\b|sq\.?\s?ft\b|लाख|करोड़|करोड|प्रतिशत)?/gi;
 // A statistic needs a unit (%, ₹, Cr, Lakh, x, sq ft...): "Check #1" or "3 steps" must not become a giant counter.
 export function numberFrom(scene) {
   const g = scene?.graphic?.counter;
   if (g && Number.isFinite(Number(g.to)) && Number(g.to) > 0) {
     // clean() trims, so a word suffix (" Lakh") must get its separating space back; symbols (%, x) stay attached.
     const sfx = clean(g.suffix, 24);
-    return {to: Number(g.to), prefix: clean(g.prefix, 8), suffix: /^[A-Za-z]/.test(sfx) ? ` ${sfx}` : sfx};
+    return {to: Number(g.to), prefix: clean(g.prefix, 8), suffix: /^[A-Za-z\u0900-\u097F]/.test(sfx) ? ` ${sfx}` : sfx};
   }
   const text = `${scene?.graphic?.headline || ''} ${scene?.subtitle || ''} ${scene?.narration || ''}`;
   for (const m of text.matchAll(NUM)) {
     if (text[m.index - 1] === '#' || (!m[1] && !m[3])) continue;
     const to = Number(m[2].replace(/,/g, ''));
     if (!Number.isFinite(to) || to <= 0 || to > 1e8) continue;
-    return {to, prefix: m[1] ? '₹' : '', suffix: m[3] ? (/^cr/i.test(m[3]) ? ' Cr' : /^lakh/i.test(m[3]) ? ' Lakh' : m[3].replace(/\s/g, '')) : ''};
+    return {to, prefix: m[1] ? '₹' : '', suffix: m[3] ? (/^करोड/.test(m[3]) ? ' करोड़' : /^लाख/.test(m[3]) ? ' लाख' : /^प्रतिशत/.test(m[3]) ? '%' : /^cr/i.test(m[3]) ? ' Cr' : /^lakh/i.test(m[3]) ? ' Lakh' : m[3].replace(/\s/g, '')) : ''};
   }
   return null;
 }
@@ -361,18 +389,18 @@ function ticker(c) {
   const t = headline(c, 'h', headlineText(c.scene, 70), {top: 392, max: 108, min: 64, lines: 3, color: P.white, chip: Boolean(c.img?.real && !isShot(c)), maxH: 330});
   const y0 = Math.max(820, 392 + t.h + 70);
   if (c.layout === 'city_pills') {
-    const pills = CITIES.map((v, k_) => `<div id="${c.p}-c${k_}" style="padding:20px 38px;border-radius:90px;font-size:52px;font-weight:900;background:${k_ % 2 ? P.white : P.orange};color:${k_ % 2 ? P.ink : P.white};">${v}</div>`).join('');
+    const pills = CITIES.map((v, k_) => `<div id="${c.p}-c${k_}" style="padding:20px 38px;border-radius:90px;font-size:52px;font-weight:900;background:${k_ % 2 ? P.white : P.orange};color:${k_ % 2 ? P.ink : P.white};">${tr(c, v)}</div>`).join('');
     return join(b, k, t, {
       html: box(`${c.p}-pills`, `top:${Math.min(y0, 760)}px;left:${SAFE.l}px;width:${SAFE.lowW}px;display:flex;flex-wrap:wrap;gap:18px;`, pills),
       js: CITIES.map((_, k_) => `tl.fromTo(${q('#' + c.p + '-c' + k_)},{opacity:0,y:70,scale:.8},{opacity:1,y:0,scale:1,duration:.55,ease:"back.out(1.5)"},${num(c.t0 + 0.25 + k_ * 0.13)});`).join(''),
     }, stamps(c, {top: 1030}));
   }
-  const lines = [headlineText(c.scene, 40), c.labels[0] || 'PROPSHORT', 'PROPSHORT NEWS', 'YOUR CITY · YOUR UPDATES'];
+  const lines = [headlineText(c.scene, 40), c.labels[0] || 'PROPSHORT', ...(c.lang === 'hi' ? ['PROPSHORT न्यूज़', 'आपका शहर · आपकी ख़बर'] : ['PROPSHORT NEWS', 'YOUR CITY · YOUR UPDATES'])];
   const bands = lines.map((txt, k_) => {
     const left = k_ % 2;
     return {
       // Marquee text is texture (it is always cropped by the frame), so it is exempt from safe-zone and overflow audits.
-      html: box(`${c.p}-b${k_}`, `left:-140px;top:${y0 + k_ * 150}px;width:1360px;padding:24px 100px;background:${left ? P.ink : P.orange};border-top:4px solid ${left ? P.orange : P.ink};color:${P.white};font-size:62px;font-weight:900;letter-spacing:-1px;white-space:nowrap;text-transform:uppercase;`, esc(clean(txt, 44) + '   ✦   ' + clean(txt, 44)), `${OVF} data-layout-ignore`),
+      html: box(`${c.p}-b${k_}`, `left:-140px;top:${y0 + k_ * 150}px;width:1360px;padding:24px 100px;background:${left ? P.ink : P.orange};border-top:4px solid ${left ? P.orange : P.ink};color:${P.white};font-size:62px;font-weight:900;letter-spacing:${c.lang === 'hi' ? 0 : -1}px;white-space:nowrap;text-transform:uppercase;`, esc(clean(txt, 44) + '   ✦   ' + clean(txt, 44)), `${OVF} data-layout-ignore`),
       js: `tl.fromTo(${q('#' + c.p + '-b' + k_)},{x:${left ? 320 : -320},rotation:${left ? -2.5 : 2.5}},{x:${left ? -140 : 140},rotation:${left ? -2.5 : 2.5},duration:${num(c.D)},ease:"none"},0);`,
     };
   });
@@ -413,11 +441,13 @@ function proof(c) {
   const thumbY = (y) => ((o0 - y) / Math.max(1, sH - Hi)) * (trackH - thumbH);
   const scroll = portrait && range > 40;
   if (scroll) {
+    // Baseline first: the steps below are fromTo tweens, so without this the resting state would be the LAST step's start value.
+    js += `tl.set(${q('#' + rd)},{y:0},0);tl.set(${q('#' + th)},{y:${num(thumbY(0))}},0);`;
     let prev = 0;
     times.forEach((tm, kx) => {
       const to = -range * frac[kx];
-      js += `tl.fromTo(${q('#' + rd)},{y:${num(prev)}},{y:${num(to)},duration:.85,ease:"power3.inOut"},${num(tm)});`;
-      js += `tl.fromTo(${q('#' + th)},{y:${num(thumbY(prev))}},{y:${num(thumbY(to))},duration:.85,ease:"power3.inOut"},${num(tm)});`;
+      js += `tl.fromTo(${q('#' + rd)},{y:${num(prev)}},{y:${num(to)},duration:.85,ease:"power3.inOut",immediateRender:false},${num(tm)});`;
+      js += `tl.fromTo(${q('#' + th)},{y:${num(thumbY(prev))}},{y:${num(thumbY(to))},duration:.85,ease:"power3.inOut",immediateRender:false},${num(tm)});`;
       prev = to;
     });
   } else if (times.length) {
@@ -448,9 +478,9 @@ function endcard(c) {
     js: `tl.fromTo(${q('#' + c.p + '-logo')},{scale:0,rotation:-25},{scale:1,rotation:0,duration:.7,ease:"back.out(1.6)"},${num(c.t0 + 0.05)});`,
   };
   const word = headline(c, 'w', 'PropShort.', {top: 520, width: SAFE.w, max: 190, min: 100, lines: 1, color: P.white, hiColor: P.white, upper: false});
-  const tag = headline(c, 'tag', clean(c.scene?.graphic?.subheading, 60) || 'Real estate, filtered for you.', {top: 520 + word.h + 20, width: SAFE.lowW, max: 62, min: 44, lines: 3, color: P.white, hiColor: P.ink, at: 0.3});
+  const tag = headline(c, 'tag', clean(c.scene?.graphic?.subheading, 60) || tr(c, 'Real estate, filtered for you.'), {top: 520 + word.h + 20, width: SAFE.lowW, max: 62, min: 44, lines: 3, color: P.white, hiColor: P.ink, at: 0.3});
   const cta = {
-    html: box(`${c.p}-cta`, `top:${520 + word.h + 20 + tag.h + 44}px;left:${SAFE.l}px;padding:28px 40px;border-radius:28px;background:${P.white};color:${P.orange};font-size:42px;font-weight:900;white-space:nowrap;`, 'EXPLORE PROPSHORT ↗'),
+    html: box(`${c.p}-cta`, `top:${520 + word.h + 20 + tag.h + 44}px;left:${SAFE.l}px;padding:28px 40px;border-radius:28px;background:${P.white};color:${P.orange};font-size:42px;font-weight:900;white-space:nowrap;`, tr(c, 'EXPLORE PROPSHORT ↗')),
     js: `tl.fromTo(${q('#' + c.p + '-cta')},{opacity:0,y:50,scale:.9},{opacity:1,y:0,scale:1,duration:.65,ease:"expo.out"},${num(c.t0 + 0.8)});`,
   };
   return join(b, ...rings, logo, word, tag, cta);

@@ -2,13 +2,15 @@
 // Sits above the platform UI band by design (brand marks and progress are texture, not reading copy).
 import {P} from './layouts.js';
 import {num} from './motion.js';
+import {FONT_STACK} from './fonts.js';
 
 const W = 1080, H = 1920;
 
-export function chromeComposition({total}) {
+export function chromeComposition({total, fontCss = ''}) {
   return `<template>
   <style>
-    #root{position:absolute;inset:0;font-family:Inter,Arial,Helvetica,sans-serif;}
+    ${fontCss}
+    #root{position:absolute;inset:0;font-family:${FONT_STACK};}
   </style>
   <div id="root" data-composition-id="chrome" data-width="${W}" data-height="${H}">
     <div id="chrome-brand" class="clip" data-start="0" data-duration="${num(total)}" data-track-index="0" data-layout-ignore style="position:absolute;top:128px;left:72px;display:flex;align-items:center;gap:12px;padding:8px 22px 8px 8px;border-radius:40px;background:rgba(255,255,255,.94);">

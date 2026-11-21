@@ -5,11 +5,12 @@
 import {captionGroups} from './timing.js';
 import {num, q} from './motion.js';
 import {esc} from './layouts.js';
+import {FONT_STACK} from './fonts.js';
 
 const W = 1080, H = 1920;
 const BOTTOM = H - 1240; // caption block sits on the bottom edge of the platform-safe band
 
-export function captionsComposition({words, total}) {
+export function captionsComposition({words, total, fontCss = ''}) {
   const groups = captionGroups(words);
   let html = '', js = '';
   groups.forEach((g, gi) => {
@@ -24,7 +25,8 @@ export function captionsComposition({words, total}) {
   });
   return `<template>
   <style>
-    #root{position:absolute;inset:0;font-family:Inter,Arial,Helvetica,sans-serif;}
+    ${fontCss}
+    #root{position:absolute;inset:0;font-family:${FONT_STACK};}
   </style>
   <div id="root" data-composition-id="captions" data-width="${W}" data-height="${H}">
 ${html}  </div>

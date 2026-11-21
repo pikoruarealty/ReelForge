@@ -5,14 +5,17 @@
 //   impacts - the few words worth showing big (numbers, the highlight word, long key terms). Each is stamped on
 //             screen at the instant it is spoken, so picture and voice land together instead of running captions.
 
-const STOP = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'your', 'you', 'are', 'was', 'from', 'what', 'why', 'how', 'will', 'can', 'not', 'but', 'about', 'they', 'their', 'have', 'has', 'had', 'into', 'than', 'then', 'there', 'here', 'when', 'where', 'which', 'would', 'could', 'should', 'just', 'more', 'most', 'some', 'only', 'before', 'after', 'check', 'verify']);
-const NUMBER_WORDS = new Set(['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'fifteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety', 'hundred', 'thousand']);
-const UNIT_WORDS = new Set(['lakh', 'lakhs', 'crore', 'crores', 'percent', '%', 'million', 'billion', 'rupees', 'rs', 'sqft', 'acres', 'acre', 'months', 'years', 'days']);
+const STOP = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'your', 'you', 'are', 'was', 'from', 'what', 'why', 'how', 'will', 'can', 'not', 'but', 'about', 'they', 'their', 'have', 'has', 'had', 'into', 'than', 'then', 'there', 'here', 'when', 'where', 'which', 'would', 'could', 'should', 'just', 'more', 'most', 'some', 'only', 'before', 'after', 'check', 'verify',
+  // Hindi function words
+  'है', 'हैं', 'का', 'की', 'के', 'में', 'से', 'को', 'और', 'पर', 'यह', 'वह', 'एक', 'नहीं', 'भी', 'तो', 'ही', 'कि', 'जो', 'था', 'थी', 'थे', 'हो', 'कर', 'लिए', 'साथ', 'बाद', 'पहले', 'क्या', 'कौन', 'कैसे', 'जब', 'अब', 'इस', 'उस', 'ये', 'वो', 'हम', 'आप', 'मैं', 'या', 'तक', 'वाले', 'वाली', 'वाला', 'रहे', 'रहा', 'रही', 'गया', 'गई', 'गए', 'सकता', 'सकती', 'सकते', 'बहुत', 'फिर', 'लेकिन', 'अगर']);
+const NUMBER_WORDS = new Set(['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'fifteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety', 'hundred', 'thousand',
+  'दो', 'तीन', 'चार', 'पांच', 'पाँच', 'छह', 'छः', 'सात', 'आठ', 'नौ', 'दस', 'ग्यारह', 'बारह', 'पंद्रह', 'बीस', 'तीस', 'चालीस', 'पचास', 'साठ', 'सत्तर', 'अस्सी', 'नब्बे', 'सौ', 'हज़ार', 'हजार', 'अठारह', 'पच्चीस', 'पैंतीस']);
+const UNIT_WORDS = new Set(['lakh', 'lakhs', 'crore', 'crores', 'percent', '%', 'million', 'billion', 'rupees', 'rs', 'sqft', 'acres', 'acre', 'months', 'years', 'days', 'लाख', 'करोड़', 'करोड', 'प्रतिशत', 'रुपये', 'रुपए', 'साल', 'महीने', 'दिन']);
 
-const norm = (w) => String(w || '').toLowerCase().replace(/[^\p{L}\p{N}%₹]/gu, '');
-const clean = (w) => String(w || '').replace(/^["'“‘(]+|[.,;:!?…"'”’)]+$/g, '');
+const norm = (w) => String(w || '').toLowerCase().replace(/[^\p{L}\p{M}\p{N}%₹]/gu, '');
+const clean = (w) => String(w || '').replace(/^["'“‘(]+|[.,;:!?…।॥"'”’)]+$/g, '');
 
-export const endsClause = (w) => /[.,;:!?…—–]["')\]]?$/.test(String(w));
+export const endsClause = (w) => /[.,;:!?…—–।॥]["')\]]?$/.test(String(w));
 
 // Clause boundaries, at least `gap` seconds apart and away from the scene edges.
 export function sceneBeats(words, D, {gap = 1.25, from = 0.9, tail = 0.9} = {}) {

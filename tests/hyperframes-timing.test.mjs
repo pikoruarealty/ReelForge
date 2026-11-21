@@ -73,3 +73,32 @@ test('highlight prefers the hint, then numbers, then the longest meaningful word
   assert.equal(pickHighlight(['Up', '12%', 'now'], null), 1);
   assert.equal(pickHighlight(['Registry', 'checks', 'matter'], null), 0);
 });
+
+// ---- Hindi --------------------------------------------------------------------------------------------------------
+import {impactMoments, sceneBeats, endsClause} from '../packages/render-hf/src/beats.js';
+
+test('hindi: the danda ends a sentence for timing, beats and caption groups', () => {
+  assert.ok(endsClause('हैं।'));
+  const hi = [{duration: 5, narration: 'यह पहला वाक्य है। यह दूसरा वाक्य है।'}, {duration: 5, narration: 'तीसरा वाक्य यहाँ है।'}];
+  const t = estimateWordTimes(hi, 0.5, 12).flat();
+  const groups = captionGroups(t);
+  assert.ok(groups.length >= 3);
+  assert.ok(groups.every((g) => g.words.length <= 3));
+});
+
+test('hindi: number words become one impact stamp and stop words never do', () => {
+  const words = 'एक ख़रीदार ने अठारह लाख रुपये देकर प्लॉट ख़रीदा जो विक्रेता का था ही नहीं'.split(' ').map((text, i) => ({text, start: 1 + i * 0.45, end: 1.3 + i * 0.45}));
+  const m = impactMoments(words, 8);
+  assert.ok(m.some((x) => x.text.includes('अठारह') && x.text.includes('लाख')));
+  assert.ok(m.every((x) => !['का', 'ही', 'नहीं', 'जो'].includes(x.text)));
+});
+
+test('hindi: counters get their unit with a separating space', () => {
+  assert.equal(numberFrom({graphic: {counter: {to: 18, prefix: '₹', suffix: 'लाख'}}}).suffix, ' लाख');
+  assert.deepEqual(numberFrom({narration: 'कीमत 12 प्रतिशत बढ़ी'}), {to: 12, prefix: '', suffix: '%'});
+  assert.equal(numberFrom({graphic: {headline: 'फ्रीहोल्ड नियम बदल सकते हैं'}}), null);
+});
+
+test('hindi: the highlight word is found even with vowel signs', () => {
+  assert.equal(pickHighlight(['रिज़र्व', 'प्राइस', 'उछला'], 'उछला'), 2);
+});
