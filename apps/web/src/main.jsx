@@ -2,7 +2,7 @@ import React,{useState,useEffect,useCallback} from 'react';
 import{createRoot}from'react-dom/client';
 import{Clapperboard,LayoutDashboard,Sparkles,Film,Settings,Plus,CheckCircle2,AlertCircle,Clock3,Play,Download,ArrowRight,ChevronRight,Image,Volume2,BrainCircuit,RefreshCw,Video,Layers,Activity,ExternalLink}from'lucide-react';
 import './style.css';
-const steps=[['Research and ideas','Claude Haiku 4.5',BrainCircuit],['Script & storyboard','Claude Sonnet 4.5',Layers],['Six AI visuals','Gemini Flash Lite Image',Image],['Voiceover','ElevenLabs Flash 2.5',Volume2],['Video composition','Remotion + FFmpeg',Film],['Optimize and evaluate','Claude Haiku + Sonnet',RefreshCw]];
+const steps=[['Research and ideas','Claude Haiku 4.5',BrainCircuit],['Script & storyboard','Claude Sonnet 4.5',Layers],['Six AI visuals','Gemini Flash Lite Image',Image],['Voiceover','ElevenLabs Flash 2.5',Volume2],['Video composition','HyperFrames + GSAP',Film],['Optimize and evaluate','Claude Haiku + Sonnet',RefreshCw]];
 const opts=['AI tools for students','3 productivity habits developers can use','Why consistent learning matters','3 mistakes when starting freelancing'];
 function CachedProjectControls({job,health,onRefresh}){
  const [quality,setQuality]=useState(null),[remixMode,setRemixMode]=useState('auto'),[remixVariety,setRemixVariety]=useState(90),[remixEnergy,setRemixEnergy]=useState(80);
