@@ -103,4 +103,16 @@ app.use('/media',express.static(store,{dotfiles:'deny',setHeaders:(res,file)=>{i
 app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'Internal server error'})});
 const recovered=await recoverInterruptedJobs().catch(e=>{console.error('Job recovery failed:',e.message);return 0});
 if(recovered)console.log(`Marked ${recovered} interrupted job(s) as failed so new jobs can start.`);
-app.listen(port,'127.0.0.1',()=>console.log(`ReelForge API on http://127.0.0.1:${port} (${process.env.DEMO_MODE==='false'?'LIVE':'DEMO'})`));
+const server=app.listen(port,'127.0.0.1',()=>console.log(`ReelForge API on http://127.0.0.1:${port} (${process.env.DEMO_MODE==='false'?'LIVE':'DEMO'})`));
+server.on('error',(e)=>{
+ if(e.code==='EADDRINUSE'){
+  console.error(`
+ReelForge API cannot start: port ${port} is already in use.
+Another ReelForge dev server (or another program) is running. Either use that one, or stop it first:
+  PowerShell:  Get-NetTCPConnection -LocalPort ${port} | Select OwningProcess   then   Stop-Process -Id <that id>
+  or set a different PORT in .env (and update the proxy in apps/web/vite.config.js).
+`);
+  process.exit(1);
+ }
+ throw e;
+});
