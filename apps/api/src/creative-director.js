@@ -25,7 +25,10 @@ export function buildCreativePlan({scenes,seed,mode='auto',variety=85,energy=75,
  const layouts=[];const transitions=[];const used=new Set();
  for(let i=0;i<scenes.length;i++){
   const last=i===scenes.length-1;const first=i===0;
-  const desired=first?'text':last?'brand':categoriesFor[mode][Math.floor(random()*categoriesFor[mode].length)];
+  const cats=categoriesFor[mode];
+  let desired=first?'text':last?'brand':cats[Math.floor(random()*cats.length)];
+  // Never two scenes of the same family back to back (e.g. two phone mockups in a row): re-draw from the others.
+  if(!first&&!last&&desired===CATEGORIES[layouts.at(-1)]){const others=cats.filter(x=>x!==desired);if(others.length)desired=others[Math.floor(random()*others.length)];}
   const pool=LAYOUTS.filter(x=>CATEGORIES[x]===desired);
   const nonRepeating=pool.filter(x=>x!==layouts.at(-1));
   const candidates=nonRepeating.length?nonRepeating:LAYOUTS.filter(x=>x!==layouts.at(-1)&&x!=='brand_endcard');

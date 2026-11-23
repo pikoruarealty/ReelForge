@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import sharp from 'sharp';
 import {fileURLToPath} from 'node:url';
 import {z} from 'zod';
-import {createJob,executeJob,listJobs,loadJob,root,store,getAssetState,updateStoryboard,regenerateAssets,rerenderJob} from './pipeline.js';
+import {createJob,executeJob,listJobs,recoverInterruptedJobs,loadJob,root,store,getAssetState,updateStoryboard,regenerateAssets,rerenderJob} from './pipeline.js';
 import {buildCreativePlan,randomSeed} from './creative-director.js';
 import {reviewInstagram} from './quality.js';
 
@@ -22,16 +22,17 @@ app.post('/api/assets',express.raw({type:['image/png','image/jpeg','image/webp']
   const metadata=await sharp(req.body,{limitInputPixels:40000000}).metadata();
   if(!['jpeg','png','webp'].includes(metadata.format))return res.status(415).json({error:'Unsupported image format'});
   const id=crypto.randomUUID();const folder=path.join(store,'uploads');await fs.mkdir(folder,{recursive:true});
-  const name=`${id}.png`;const normalized=await sharp(req.body).rotate().resize(1080,1920,{fit:'cover',position:'attention'}).png().toBuffer();
+  const name=`${id}.png`;// Keep the whole image: screenshots must never be cropped at upload. Fit-to-9:16 cropping, if wanted, happens per job (uploadFit=cover).
+  const normalized=await sharp(req.body).rotate().resize({width:1600,height:1600,fit:'inside',withoutEnlargement:true}).png().toBuffer();const outMeta=await sharp(normalized).metadata();
   await fs.writeFile(path.join(folder,name),normalized,{flag:'wx'});
-  const asset={id,name,originalName:String(req.query.name||'uploaded-image').slice(0,120),width:1080,height:1920,url:`/media/uploads/${name}`};
+  const asset={id,name,originalName:String(req.query.name||'uploaded-image').slice(0,120),width:outMeta.width,height:outMeta.height,url:`/media/uploads/${name}`};
   await fs.writeFile(path.join(folder,`${id}.json`),JSON.stringify(asset));res.status(201).json(asset);
  }catch(e){res.status(400).json({error:`Invalid image: ${e.message}`});}
 });
 app.get('/api/assets',async(_,res)=>{const folder=path.join(store,'uploads');const names=(await fs.readdir(folder).catch(()=>[])).filter(n=>n.endsWith('.json'));const assets=await Promise.all(names.map(async n=>JSON.parse(await fs.readFile(path.join(folder,n),'utf8'))));res.json(assets)});
 app.get('/api/jobs',async(_,res)=>res.json(await listJobs()));
 app.get('/api/jobs/:id',async(req,res)=>{const job=await loadJob(req.params.id);job?res.json(job):res.status(404).json({error:'Job not found'})});
-app.post('/api/jobs',async(req,res)=>{const parsed=z.object({topic:z.string().trim().min(4).max(5000),imageSource:z.enum(['generated','uploaded']).default('generated'),assetIds:z.array(z.string().uuid()).max(12).default([]),creativeMode:z.enum(['auto','kinetic','showcase','news','cinematic']).default('auto'),creativitySeed:z.number().int().min(0).max(4294967295).optional(),visualVariety:z.number().int().min(0).max(100).default(85)}).refine(d=>d.imageSource!=='uploaded'||d.assetIds.length>0,{message:'Upload images before choosing uploaded mode'}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Topic must be 4–5000 characters'});const active=(await listJobs()).find(j=>['working','queued'].includes(j.status));if(active)return res.status(409).json({error:'A generation job is already running. Wait until it completes.'});try{const job=await createJob(parsed.data.topic,parsed.data.imageSource,parsed.data.assetIds,{creativeMode:parsed.data.creativeMode,creativitySeed:parsed.data.creativitySeed,visualVariety:parsed.data.visualVariety});res.status(202).json({id:job.id,status:job.status});setImmediate(()=>executeJob(job));}catch(e){res.status(500).json({error:e.message})}});
+app.post('/api/jobs',async(req,res)=>{const parsed=z.object({topic:z.string().trim().min(4).max(5000),imageSource:z.enum(['generated','uploaded']).default('generated'),assetIds:z.array(z.string().uuid()).max(12).default([]),creativeMode:z.enum(['auto','kinetic','showcase','news','cinematic']).default('auto'),creativitySeed:z.number().int().min(0).max(4294967295).optional(),visualVariety:z.number().int().min(0).max(100).default(85),uploadFit:z.enum(['contain','cover']).default('contain'),language:z.enum(['en','hi','hi_voice']).default('en')}).refine(d=>d.imageSource!=='uploaded'||d.assetIds.length>0,{message:'Upload images before choosing uploaded mode'}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Topic must be 4–5000 characters'});const active=(await listJobs()).find(j=>['working','queued'].includes(j.status));if(active)return res.status(409).json({error:'A generation job is already running. Wait until it completes.'});try{const job=await createJob(parsed.data.topic,parsed.data.imageSource,parsed.data.assetIds,{creativeMode:parsed.data.creativeMode,creativitySeed:parsed.data.creativitySeed,visualVariety:parsed.data.visualVariety,uploadFit:parsed.data.uploadFit,language:parsed.data.language});res.status(202).json({id:job.id,status:job.status});setImmediate(()=>executeJob(job));}catch(e){res.status(500).json({error:e.message})}});
 // Local single-owner development controls. Never expose these endpoints publicly without authentication.
 app.get('/api/jobs/:id/quality',async(req,res)=>{const job=await loadJob(req.params.id);if(!job)return res.status(404).json({error:'Project not found'});try{res.json(await reviewInstagram(job))}catch(e){res.status(400).json({error:e.message})}});
 app.get('/api/jobs/:id/cache',async(req,res)=>{const job=await loadJob(req.params.id);if(!job)return res.status(404).json({error:'Project not found'});try{res.json(await getAssetState({...job,dir:path.join(store,job.id)}))}catch(e){res.status(400).json({error:e.message})}});
@@ -100,4 +101,18 @@ app.post('/api/jobs/:id/regenerate',async(req,res)=>{
 });
 app.use('/media',express.static(store,{dotfiles:'deny',setHeaders:(res,file)=>{if(file.endsWith('.json'))res.setHeader('Cache-Control','no-store')}}));
 app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'Internal server error'})});
-app.listen(port,'127.0.0.1',()=>console.log(`ReelForge API on http://127.0.0.1:${port} (${process.env.DEMO_MODE==='false'?'LIVE':'DEMO'})`));
+const recovered=await recoverInterruptedJobs().catch(e=>{console.error('Job recovery failed:',e.message);return 0});
+if(recovered)console.log(`Marked ${recovered} interrupted job(s) as failed so new jobs can start.`);
+const server=app.listen(port,'127.0.0.1',()=>console.log(`ReelForge API on http://127.0.0.1:${port} (${process.env.DEMO_MODE==='false'?'LIVE':'DEMO'})`));
+server.on('error',(e)=>{
+ if(e.code==='EADDRINUSE'){
+  console.error(`
+ReelForge API cannot start: port ${port} is already in use.
+Another ReelForge dev server (or another program) is running. Either use that one, or stop it first:
+  PowerShell:  Get-NetTCPConnection -LocalPort ${port} | Select OwningProcess   then   Stop-Process -Id <that id>
+  or set a different PORT in .env (and update the proxy in apps/web/vite.config.js).
+`);
+  process.exit(1);
+ }
+ throw e;
+});

@@ -18,6 +18,7 @@ export async function reviewInstagram(job){
  if(plan.scenes.some(s=>!String(s.subtitle||'').trim()))fail('Caption presence','At least one scene lacks a caption');else pass('Caption presence','Every scene has a subtitle');
  if(plan.scenes.some(s=>String(s.subtitle||'').length>70))fail('Caption length','Some subtitles may be too long for mobile');else pass('Caption length','Scene subtitles fit within a conservative length limit');
  if((job.renderTheme||'default')!=='propshort')fail('Brand theme','PropShort theme is not selected');else pass('Brand theme','PropShort palette selected');
+ if(job.timing?.slots?.length)pass('Narration sync',`Scene lengths follow the voiceover (${job.timing.source} word timing): ${job.timing.slots.map(x=>x.duration.toFixed(1)+'s').join(', ')}`);
  const mp4=path.join(dir,'reel.mp4');
  try{const info=await probe(mp4);const video=info.streams?.find(x=>x.codec_type==='video'),audio=info.streams?.find(x=>x.codec_type==='audio');
   if(video?.width===1080&&video?.height===1920)pass('Instagram frame','1080 × 1920 vertical');else fail('Instagram frame',`Video resolution ${video?.width||'?'}×${video?.height||'?'}, expected 1080×1920`,true);

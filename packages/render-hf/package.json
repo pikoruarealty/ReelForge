@@ -1,1 +1,1 @@
-{"name":"@reel/render-hf","private":true,"version":"1.0.0","type":"module","main":"src/index.js","dependencies":{"hyperframes":"0.9.75"}}
+{"name":"@reel/render-hf","private":true,"version":"1.0.0","type":"module","main":"src/index.js","dependencies":{"hyperframes":"0.9.75","gsap":"3.15.1"},"exports":{".":"./src/index.js","./timing":"./src/timing.js"}}
